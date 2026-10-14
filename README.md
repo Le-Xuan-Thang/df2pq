@@ -93,9 +93,10 @@ The cuDF/GPU integration test is opt-in: prefix the command with
 
 ## Portable desktop builds
 
-GitHub Actions builds a portable Windows ZIP, macOS app ZIP, and Linux tarball
-on pushes to `main` and on version tags. Pushing a tag such as `v0.1.0` also
-creates a GitHub Release with all three downloads attached.
+GitHub Actions builds portable Windows x64 and Linux x64 bundles plus macOS
+app ZIPs for Intel and Apple Silicon on pushes to `main` and version tags.
+Pushing a tag such as `v0.1.0` also creates a GitHub Release with the downloads
+attached.
 
 To build locally, install the packaging extra and run PyInstaller:
 
