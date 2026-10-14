@@ -7,12 +7,25 @@ unless overwrite is enabled.
 
 df2pq is released under the MIT License. See `LICENSE`.
 
+## Installation
+
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                      # base install (pandas, pyarrow, NiceGUI)
+uv sync --extra excel        # optional: Excel readers/writers
+uv sync --extra gpu-cu13     # optional: cuDF for CUDA 13 (Python 3.11+)
+```
+
+cuDF is optional and must match the CUDA/RAPIDS version on your system; the
+`gpu-cu13` extra targets CUDA 13.
+
 ## Desktop GUI
 
 Launch the app from the repository root:
 
 ```bash
-uv run python -m df2pq      # NiceGUI interface (opens its own Chrome/Edge app window)
+uv run df2pq                # NiceGUI interface (same as: uv run python -m df2pq)
 uv run df2pq-tk             # legacy Tkinter interface
 ```
 
@@ -26,19 +39,6 @@ every 12 hours and can be switched off. For a clean git checkout, "Update now"
 fast-forwards the repository and refreshes dependencies (keeping optional extras
 such as cuDF); other installs show the command or release page to use. The
 changelog lives in `df2pq/CHANGELOG.md`.
-
-Install the base project first with `uv sync`. To install optional Excel
-readers/writers, use `uv sync --extra excel`. cuDF is optional and should be
-installed for the CUDA/RAPIDS version that matches your system; this project
-provides a `gpu-cu13` extra for Python 3.11+ and CUDA 13.
-
-```bash
-uv sync
-# Optional Excel support:
-uv sync --extra excel
-# Optional CUDA 13/cuDF support:
-uv sync --extra gpu-cu13
-```
 
 GPU notes: the GUI checks at startup that cuDF really runs and shows the result
 in the header pill; cuDF becomes the default engine when it does. Files larger
@@ -54,7 +54,8 @@ The output layout is `OUTPUT_ROOT/SOURCE_FOLDER_NAME/...`.
 
 ## Command-line usage
 
-Convert two CSV folders into Parquet:
+Convert two CSV folders into Parquet (`df2pq-convert` is the installed alias for
+`python -m df2pq.converter`):
 
 ```bash
 uv run python -m df2pq.converter \
@@ -100,9 +101,9 @@ uv run python -m df2pq.converter \
   --no-header
 ```
 
-Run `uv run python -m df2pq.converter --help` for all CLI options. If Tkinter
-is missing from your Python installation on Linux, install the system Tk
-package (for example, `python3-tk`).
+Run `uv run df2pq-convert --help` for all CLI options. The legacy `df2pq-tk`
+interface needs Tkinter; on Linux install the system Tk package (for example,
+`python3-tk`) if it is missing.
 
 ## Tests
 
