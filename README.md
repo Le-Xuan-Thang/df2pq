@@ -67,8 +67,7 @@ Excel reader/writer engine such as `openpyxl`. cuDF requires a compatible
 RAPIDS/CUDA environment. JSON Lines files can be read or written with
 `--json-lines` or select `jsonl` as the input/output format.
 
-For the headerless, semicolon-separated Lello CSV files from
-`notebooks/01_csv_to_parquet.ipynb`:
+For headerless, semicolon-separated Lello CSV files:
 
 ```bash
 uv run python -m df2pq.converter \
@@ -91,6 +90,22 @@ package (for example, `python3-tk`).
 Run the standard suite with `uv run python -m unittest discover -s tests -v`.
 The cuDF/GPU integration test is opt-in: prefix the command with
 `DF2PQ_TEST_CUDF=1` on a machine with a working RAPIDS installation.
+
+## Portable desktop builds
+
+GitHub Actions builds a portable Windows ZIP, macOS app ZIP, and Linux tarball
+on pushes to `main` and on version tags. Pushing a tag such as `v0.1.0` also
+creates a GitHub Release with all three downloads attached.
+
+To build locally, install the packaging extra and run PyInstaller:
+
+```bash
+uv sync --extra packaging --extra excel
+uv run df2pq-build
+```
+
+The portable bundles use the CPU backends. cuDF remains an optional install for
+compatible CUDA/RAPIDS systems and is shown in the GUI only when available.
 
 The folder also includes the earlier verified Lello-specific converter and
 Parquet benchmark scripts: `convert_lello_parquet.py`,

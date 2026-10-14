@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 excel = ["openpyxl>=3.1", "xlrd>=2.0.1"]
 gpu-cu13 = ["cudf-cu13>=26.10.0; python_version >= '3.11'"]
+packaging = ["pyinstaller>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/Le-Xuan-Thang/df2pq"
@@ -29,7 +30,14 @@ df2pq = "df2pq.app:main"
 df2pq-convert = "df2pq.converter:main"
 df2pq-lello = "convert_lello_parquet:main"
 df2pq-check = "check_parquet:main"
+df2pq-build = "build_portable:main"
 
 [tool.setuptools]
 packages = ["df2pq"]
-py-modules = ["check_parquet", "convert_csv_to_parquet", "convert_lello_parquet"]
+py-modules = [
+    "build_gui",
+    "build_portable",
+    "check_parquet",
+    "convert_csv_to_parquet",
+    "convert_lello_parquet",
+]

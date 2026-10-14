@@ -4,5 +4,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+*.spec
 .pytest_cache/
 cufile.log
+# Local notebooks may contain executed output and machine-specific paths.
+notebooks/

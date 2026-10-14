@@ -254,9 +254,16 @@ def build_jobs(
 
 
 def _load_engine(engine: str) -> Any:
-    module_name = {"pandas": "pandas", "cudf": "cudf", "pyarrow": "pyarrow"}[engine]
     try:
-        return importlib.import_module(module_name)
+        if engine == "pandas":
+            import pandas
+
+            return pandas
+        if engine == "pyarrow":
+            import pyarrow
+
+            return pyarrow
+        return importlib.import_module("cudf")
     except Exception as exc:
         install_hint = {
             "pandas": "Install pandas to use --engine pandas.",
@@ -321,20 +328,29 @@ def _read_ipc(path: Path, ipc: Any, pa: Any) -> Any:
 
 def _read_pyarrow(path: Path, file_format: str, options: IOOptions, pa: Any) -> Any:
     if file_format in {"csv", "tsv"}:
-        arrow_csv = importlib.import_module("pyarrow.csv")
+        import pyarrow.csv as arrow_csv
+
         read_options = arrow_csv.ReadOptions(autogenerate_column_names=not options.header)
         parse_options = arrow_csv.ParseOptions(
             delimiter=_separator(file_format, options.input_separator)
         )
         return arrow_csv.read_csv(path, read_options=read_options, parse_options=parse_options)
     if file_format == "parquet":
-        return importlib.import_module("pyarrow.parquet").read_table(path)
+        import pyarrow.parquet as parquet
+
+        return parquet.read_table(path)
     if file_format == "feather":
-        return importlib.import_module("pyarrow.feather").read_table(path)
+        import pyarrow.feather as feather
+
+        return feather.read_table(path)
     if file_format == "orc":
-        return importlib.import_module("pyarrow.orc").ORCFile(path).read()
+        import pyarrow.orc as orc
+
+        return orc.ORCFile(path).read()
     if file_format == "ipc":
-        return _read_ipc(path, importlib.import_module("pyarrow.ipc"), pa)
+        import pyarrow.ipc as ipc
+
+        return _read_ipc(path, ipc, pa)
     raise ValueError(f"Unsupported PyArrow input format: {file_format}")
 
 
@@ -406,19 +422,27 @@ def _write_pyarrow(
 ) -> None:
     table = _as_arrow_table(data, engine, pa)
     if file_format in {"csv", "tsv"}:
-        arrow_csv = importlib.import_module("pyarrow.csv")
+        import pyarrow.csv as arrow_csv
+
         write_options = arrow_csv.WriteOptions(
             delimiter=_separator(file_format, options.output_separator)
         )
         arrow_csv.write_csv(table, path, write_options=write_options)
     elif file_format == "parquet":
-        importlib.import_module("pyarrow.parquet").write_table(table, path)
+        import pyarrow.parquet as parquet
+
+        parquet.write_table(table, path)
     elif file_format == "feather":
-        importlib.import_module("pyarrow.feather").write_feather(table, path)
+        import pyarrow.feather as feather
+
+        feather.write_feather(table, path)
     elif file_format == "orc":
-        importlib.import_module("pyarrow.orc").write_table(table, path)
+        import pyarrow.orc as orc
+
+        orc.write_table(table, path)
     elif file_format == "ipc":
-        ipc = importlib.import_module("pyarrow.ipc")
+        import pyarrow.ipc as ipc
+
         with pa.OSFile(str(path), "wb") as sink:
             with ipc.new_file(sink, table.schema) as writer:
                 writer.write_table(table)
