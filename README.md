@@ -113,10 +113,18 @@ The cuDF/GPU integration test is opt-in: prefix the command with
 
 ## Portable desktop builds
 
-GitHub Actions builds portable Windows x64 and Linux x64 bundles plus macOS
-app ZIPs for Intel and Apple Silicon on pushes to `main` and version tags.
+GitHub Actions builds these on pushes to `main` and version tags:
+
+| Platform | Files |
+| --- | --- |
+| Windows x64 | `df2pq-windows-x86_64-setup.exe` installer, portable `.zip` |
+| Linux x64 | `.deb`, `.rpm`, portable `.tar.gz` |
+| macOS (Intel, Apple Silicon) | app `.zip` |
+
 Pushing a tag such as `v0.1.0` also creates a GitHub Release with the downloads
-attached.
+attached. Install on Linux with `sudo apt install ./df2pq_*.deb` or
+`sudo dnf install ./df2pq-*.rpm`; the app is then available as `df2pq` and in
+the application menu.
 
 To build locally, install the packaging extra and run PyInstaller:
 

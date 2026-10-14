@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=df2pq
+GenericName=Batch Data Converter
+Comment=Convert CSV, Parquet, Feather, JSON, ORC and Excel files in bulk
+Exec=df2pq
+Terminal=false
+Categories=Utility;Development;

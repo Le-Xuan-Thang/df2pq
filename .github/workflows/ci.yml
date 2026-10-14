@@ -70,12 +70,30 @@ jobs:
         if: runner.os == 'Linux'
         run: tar -czf df2pq-linux-x86_64.tar.gz -C dist df2pq
 
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\windows\df2pq.iss
+      - name: Build Linux .deb and .rpm
+        if: runner.os == 'Linux'
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz | tar -xz nfpm
+          for fmt in deb rpm; do
+            VERSION=$VERSION ./nfpm package -p $fmt -f packaging/linux/nfpm.yaml -t .
+          done
+
       - name: Upload Windows build
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7.0.2
         with:
           name: df2pq-windows-x86_64
-          path: df2pq-windows-x86_64.zip
+          path: |
+            df2pq-windows-x86_64.zip
+            df2pq-windows-x86_64-setup.exe
           if-no-files-found: error
       - name: Upload macOS build
         if: runner.os == 'macOS'
@@ -89,7 +107,10 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: df2pq-linux-x86_64
-          path: df2pq-linux-x86_64.tar.gz
+          path: |
+            df2pq-linux-x86_64.tar.gz
+            *.deb
+            *.rpm
           if-no-files-found: error
 
   release:
