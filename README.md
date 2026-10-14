@@ -39,16 +39,16 @@ Convert two CSV folders into Parquet:
 
 ```bash
 uv run python -m df2pq.converter \
-  --source "/data/Lello_07_23" \
-  --source "/data/Lello_12_23" \
+  --source "/data/campaign_07_23" \
+  --source "/data/campaign_12_23" \
   --output "/data/Parquet" \
   --input-format csv \
   --output-format parquet \
   --engine pandas
 ```
 
-The output paths will be `/data/Parquet/Lello_07_23/...` and
-`/data/Parquet/Lello_12_23/...`, retaining any subfolders below each source.
+The output paths will be `/data/Parquet/campaign_07_23/...` and
+`/data/Parquet/campaign_12_23/...`, retaining subfolders below each source.
 `--input-format auto` (the default) detects formats from file extensions and
 can convert mixed-format input folders to one chosen output format. Use
 `--dry-run` to preview file mappings, `--limit 5` for a small trial, and
@@ -67,12 +67,12 @@ Excel reader/writer engine such as `openpyxl`. cuDF requires a compatible
 RAPIDS/CUDA environment. JSON Lines files can be read or written with
 `--json-lines` or select `jsonl` as the input/output format.
 
-For headerless, semicolon-separated Lello CSV files:
+For headerless, semicolon-separated numeric CSV files:
 
 ```bash
 uv run python -m df2pq.converter \
-  --source "/data/Lello_07_23" \
-  --source "/data/Lello_12_23" \
+  --source "/data/recordings_a" \
+  --source "/data/recordings_b" \
   --output "/data/Parquet" \
   --input-format csv \
   --output-format parquet \
@@ -108,8 +108,8 @@ uv run df2pq-build
 The portable bundles use the CPU backends. cuDF remains an optional install for
 compatible CUDA/RAPIDS systems and is shown in the GUI only when available.
 
-The folder also includes the earlier verified Lello-specific converter and
-Parquet benchmark scripts: `convert_lello_parquet.py`,
-`convert_csv_to_parquet.py`, and `check_parquet.py`.
-When installed, the specialized converter and benchmark are available as
-`df2pq-lello` and `df2pq-check`.
+The project also includes a verified converter for headerless nine-column
+numeric CSV files (`convert_headerless_csv_to_parquet.py`), a compatibility
+entry point (`convert_csv_to_parquet.py`), and a Parquet benchmark
+(`check_parquet.py`). When installed, these are available as
+`df2pq-headerless-csv` and `df2pq-check`.

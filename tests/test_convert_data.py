@@ -61,7 +61,7 @@ class ConvertDataTests(unittest.TestCase):
     def test_pyarrow_reads_headerless_semicolon_csv_and_dry_run_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary = Path(temporary_directory)
-            source = temporary / "Lello_07_23"
+            source = temporary / "source_csv"
             source.mkdir()
             (source / "record.csv").write_text("0.00;11.70\n0.01;11.71\n", encoding="utf-8")
             output = temporary / "parquet"
@@ -81,7 +81,7 @@ class ConvertDataTests(unittest.TestCase):
 
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(main(arguments), 0)
-            table = pq.read_table(output / "Lello_07_23" / "record.parquet")
+            table = pq.read_table(output / "source_csv" / "record.parquet")
             self.assertEqual(table.column_names, ["f0", "f1"])
             self.assertEqual(table.column("f1").to_pylist(), [11.70, 11.71])
 

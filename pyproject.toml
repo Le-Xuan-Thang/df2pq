@@ -28,7 +28,7 @@ Issues = "https://github.com/Le-Xuan-Thang/df2pq/issues"
 [project.scripts]
 df2pq = "df2pq.app:main"
 df2pq-convert = "df2pq.converter:main"
-df2pq-lello = "convert_lello_parquet:main"
+df2pq-headerless-csv = "convert_headerless_csv_to_parquet:main"
 df2pq-check = "check_parquet:main"
 df2pq-build = "build_portable:main"
 
@@ -39,5 +39,5 @@ py-modules = [
     "build_portable",
     "check_parquet",
     "convert_csv_to_parquet",
-    "convert_lello_parquet",
+    "convert_headerless_csv_to_parquet",
 ]
