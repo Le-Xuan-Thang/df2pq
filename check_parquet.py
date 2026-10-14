@@ -45,8 +45,8 @@ def check_pair(source, target, repeats=5):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     data = Path(__file__).resolve().parent
-    parser.add_argument("--source", type=Path, default=data / "Lello Data")
-    parser.add_argument("--parquet", type=Path, default=data / "Lello Parquet")
+    parser.add_argument("--source", type=Path, default=data / "CSV Data")
+    parser.add_argument("--parquet", type=Path, default=data / "Parquet Data")
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--report", type=Path, default=data / "results/parquet_check.json")

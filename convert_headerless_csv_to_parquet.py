@@ -2,9 +2,10 @@
 # requires-python = ">=3.10"
 # dependencies = ["pyarrow>=18"]
 # ///
-"""Convert headerless Lello CSV recordings to verified float64 Parquet files.
+"""Convert headerless semicolon-delimited numeric CSV files to verified Parquet.
 
-Run from the df2pq project root with `uv run python convert_lello_parquet.py`.
+The input must contain nine numeric columns: time_s and channel_1 through
+channel_8. Run from the project root with `uv run python convert_headerless_csv_to_parquet.py`.
 """
 from pathlib import Path
 import argparse
@@ -19,8 +20,8 @@ import pyarrow.parquet as pq
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     project_root = Path(__file__).resolve().parent
-    parser.add_argument("--source", type=Path, default=project_root / "Lello Data")
-    parser.add_argument("--output", type=Path, default=project_root / "Lello Parquet")
+    parser.add_argument("--source", type=Path, default=project_root / "CSV Data")
+    parser.add_argument("--output", type=Path, default=project_root / "Parquet Data")
     parser.add_argument("--limit", type=int, help="Convert only the first N files for a trial")
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit < 1:

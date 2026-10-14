@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-header",
         action="store_false",
         dest="header",
-        help="Treat delimited-text inputs as headerless (useful for the Lello CSVs).",
+        help="Treat delimited-text inputs as headerless.",
     )
     parser.set_defaults(header=True)
     parser.add_argument(
