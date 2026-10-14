@@ -21,6 +21,8 @@ from .gpu import GpuStatus, probe_cudf
 from .runner import BatchRunner
 from .scan import FolderSummary, fuzzy_match, human_size, places, summarize_folder
 from .settings import Settings
+from .updates import current_version
+from .web_about import cached_update, check_for_updates, check_is_due, show_about
 
 ENGINE_LABELS = {"cudf": "cuDF · GPU", "pandas": "Pandas · CPU", "pyarrow": "PyArrow · CPU"}
 ENGINE_HINTS = {
@@ -74,6 +76,15 @@ body { background: var(--bg) !important; color: var(--ink); font-size: 14px;
 .q-linear-progress { border-radius: 99px; }
 .q-expansion-item__container, .q-expansion-item { background: transparent; }
 .nicegui-content { padding: 0 !important; }
+.df-version { color: var(--muted); }
+.df-markdown h1 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
+.df-markdown h2 { font-size: 17px; font-weight: 650; margin: 22px 0 6px; color: var(--ink); }
+.df-markdown h3 { font-size: 13px; font-weight: 700; margin: 14px 0 4px; color: #60A5FA;
+                  text-transform: uppercase; letter-spacing: .06em; }
+.df-markdown p, .df-markdown li { color: var(--muted); line-height: 1.6; }
+.df-markdown a { color: #60A5FA; }
+.df-markdown code { background: var(--field); padding: 1px 6px; border-radius: 5px;
+                    font-family: var(--df-mono); font-size: 12.5px; }
 """
 
 
@@ -337,7 +348,14 @@ def index() -> None:
                 ui.label("df2pq").classes("df-title")
                 ui.label("Batch-convert folders of tabular data. Your originals are never "
                          "modified.").classes("df-muted")
-            w["gpu"] = ui.label("Checking GPU…").classes("df-pill df-pill-busy")
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                w["badge"] = ui.label().classes("df-pill df-pill-busy cursor-pointer").on(
+                    "click", lambda: show_about(S.settings, "updates", on_checked=sync_badge))
+                w["badge"].set_visibility(False)
+                ui.button(f"v{current_version()}", icon="new_releases",
+                          on_click=lambda: show_about(S.settings, on_checked=sync_badge)
+                          ).props("flat no-caps dense").classes("df-version")
+                w["gpu"] = ui.label("Checking GPU…").classes("df-pill df-pill-busy")
 
         with ui.row().classes("w-full no-wrap gap-5 items-stretch"):
             # 1 — sources
@@ -450,6 +468,17 @@ def index() -> None:
             w["log"] = ui.log(max_lines=500).classes("df-log w-full").style("height:170px")
 
     # ---- behaviour ---------------------------------------------------------------------
+    def sync_badge() -> None:
+        tag = cached_update(S.settings)
+        w["badge"].set_visibility(bool(tag))
+        if tag:
+            w["badge"].set_text(f"Update {tag} available")
+
+    async def auto_check() -> None:
+        if check_is_due(S.settings):
+            await check_for_updates(S.settings)
+        sync_badge()
+
     def set_status(text: str, tone: str = "") -> None:
         colors = {"": "#F1F5F9", "info": "#60A5FA", "ok": "#4ADE80", "warn": "#FBBF24",
                   "err": "#F87171"}
@@ -729,6 +758,8 @@ def index() -> None:
         show_gpu()
     refresh()
     ui.timer(0.15, poll)
+    ui.timer(1.5, auto_check, once=True)
+    sync_badge()
 
 
 # ---- launcher ------------------------------------------------------------------------------

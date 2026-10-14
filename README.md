@@ -20,6 +20,13 @@ The interface is served on localhost by NiceGUI. It opens in a Chrome/Edge app
 window when one is installed (otherwise your default browser) and the server
 exits when that window is closed. Use `--no-window` to only print the URL.
 
+Click the version button in the header to read the changelog ("What's new") or
+check GitHub for a newer release ("Updates"). Checks run automatically at most
+every 12 hours and can be switched off. For a clean git checkout, "Update now"
+fast-forwards the repository and refreshes dependencies (keeping optional extras
+such as cuDF); other installs show the command or release page to use. The
+changelog lives in `df2pq/CHANGELOG.md`.
+
 Install the base project first with `uv sync`. To install optional Excel
 readers/writers, use `uv sync --extra excel`. cuDF is optional and should be
 installed for the CUDA/RAPIDS version that matches your system; this project

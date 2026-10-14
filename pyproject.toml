@@ -34,6 +34,9 @@ df2pq-headerless-csv = "convert_headerless_csv_to_parquet:main"
 df2pq-check = "check_parquet:main"
 df2pq-build = "build_portable:main"
 
+[tool.setuptools.package-data]
+df2pq = ["CHANGELOG.md"]
+
 [tool.setuptools]
 packages = ["df2pq"]
 py-modules = [
