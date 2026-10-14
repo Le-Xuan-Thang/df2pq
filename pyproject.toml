@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "df2pq"
+version = "0.1.0"
+description = "A desktop and batch converter for tabular data files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "pandas>=2.2",
+    "pyarrow>=16.0",
+]
+
+[project.optional-dependencies]
+excel = ["openpyxl>=3.1", "xlrd>=2.0.1"]
+gpu-cu13 = ["cudf-cu13>=26.10.0; python_version >= '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/Le-Xuan-Thang/df2pq"
+Repository = "https://github.com/Le-Xuan-Thang/df2pq"
+Issues = "https://github.com/Le-Xuan-Thang/df2pq/issues"
+
+[project.scripts]
+df2pq = "df2pq.app:main"
+df2pq-convert = "df2pq.converter:main"
+df2pq-lello = "convert_lello_parquet:main"
+df2pq-check = "check_parquet:main"
+
+[tool.setuptools]
+packages = ["df2pq"]
+py-modules = ["check_parquet", "convert_csv_to_parquet", "convert_lello_parquet"]

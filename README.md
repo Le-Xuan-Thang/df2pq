@@ -1,1 +1,99 @@
-# df2pq
+# df2pq — Batch Data Converter
+
+df2pq converts tabular files from one or more folders and recreates each
+selected source folder below a destination folder. Nested subfolders are
+preserved, source files are left untouched, and existing outputs are skipped
+unless overwrite is enabled.
+
+df2pq is released under the MIT License. See `LICENSE`.
+
+## Desktop GUI
+
+Launch the app from the repository root:
+
+```bash
+uv run python -m df2pq
+```
+
+Install the base project first with `uv sync`. To install optional Excel
+readers/writers, use `uv sync --extra excel`. cuDF is optional and should be
+installed for the CUDA/RAPIDS version that matches your system; this project
+provides a `gpu-cu13` extra for Python 3.11+ and CUDA 13.
+
+```bash
+uv sync
+# Optional Excel support:
+uv sync --extra excel
+# Optional CUDA 13/cuDF support:
+uv sync --extra gpu-cu13
+```
+
+Add each source folder, choose the output root, then select an engine and file
+formats. The GUI includes a preview, progress reporting, cancellation, and
+options for separators, headers, recursion, limits, JSON Lines, and overwriting.
+The output layout is `OUTPUT_ROOT/SOURCE_FOLDER_NAME/...`.
+
+## Command-line usage
+
+Convert two CSV folders into Parquet:
+
+```bash
+uv run python -m df2pq.converter \
+  --source "/data/Lello_07_23" \
+  --source "/data/Lello_12_23" \
+  --output "/data/Parquet" \
+  --input-format csv \
+  --output-format parquet \
+  --engine pandas
+```
+
+The output paths will be `/data/Parquet/Lello_07_23/...` and
+`/data/Parquet/Lello_12_23/...`, retaining any subfolders below each source.
+`--input-format auto` (the default) detects formats from file extensions and
+can convert mixed-format input folders to one chosen output format. Use
+`--dry-run` to preview file mappings, `--limit 5` for a small trial, and
+`--overwrite` to replace existing outputs.
+
+The formats available depend on the selected engine:
+
+| Engine | Read/write formats |
+| --- | --- |
+| `pandas` | CSV, TSV, Parquet, Feather, JSON/JSONL, ORC, Excel, Pickle |
+| `cudf` | CSV, TSV, Parquet, Feather, JSON/JSONL, ORC |
+| `pyarrow` | CSV, TSV, Parquet, Feather, ORC, Arrow IPC (`.arrow`/`.ipc`) |
+
+Install the corresponding libraries for the selected engine. Excel requires an
+Excel reader/writer engine such as `openpyxl`. cuDF requires a compatible
+RAPIDS/CUDA environment. JSON Lines files can be read or written with
+`--json-lines` or select `jsonl` as the input/output format.
+
+For the headerless, semicolon-separated Lello CSV files from
+`notebooks/01_csv_to_parquet.ipynb`:
+
+```bash
+uv run python -m df2pq.converter \
+  --source "/data/Lello_07_23" \
+  --source "/data/Lello_12_23" \
+  --output "/data/Parquet" \
+  --input-format csv \
+  --output-format parquet \
+  --engine pyarrow \
+  --input-separator ";" \
+  --no-header
+```
+
+Run `uv run python -m df2pq.converter --help` for all CLI options. If Tkinter
+is missing from your Python installation on Linux, install the system Tk
+package (for example, `python3-tk`).
+
+## Tests
+
+Run the standard suite with `uv run python -m unittest discover -s tests -v`.
+The cuDF/GPU integration test is opt-in: prefix the command with
+`DF2PQ_TEST_CUDF=1` on a machine with a working RAPIDS installation.
+
+The folder also includes the earlier verified Lello-specific converter and
+Parquet benchmark scripts: `convert_lello_parquet.py`,
+`convert_csv_to_parquet.py`, and `check_parquet.py`.
+When installed, the specialized converter and benchmark are available as
+`df2pq-lello` and `df2pq-check`.
