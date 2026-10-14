@@ -12,8 +12,13 @@ df2pq is released under the MIT License. See `LICENSE`.
 Launch the app from the repository root:
 
 ```bash
-uv run python -m df2pq
+uv run python -m df2pq      # NiceGUI interface (opens its own Chrome/Edge app window)
+uv run df2pq-tk             # legacy Tkinter interface
 ```
+
+The interface is served on localhost by NiceGUI. It opens in a Chrome/Edge app
+window when one is installed (otherwise your default browser) and the server
+exits when that window is closed. Use `--no-window` to only print the URL.
 
 Install the base project first with `uv sync`. To install optional Excel
 readers/writers, use `uv sync --extra excel`. cuDF is optional and should be
@@ -27,6 +32,13 @@ uv sync --extra excel
 # Optional CUDA 13/cuDF support:
 uv sync --extra gpu-cu13
 ```
+
+GPU notes: the GUI checks at startup that cuDF really runs and shows the result
+in the header pill; cuDF becomes the default engine when it does. Files larger
+than VRAM spill to host RAM, and a file the GPU cannot handle is retried on the
+CPU automatically. cuDF needs several GB of disk, so if `uv sync --extra
+gpu-cu13` fails with "No space left on device", free space on the drive that
+holds `.venv` and re-run it.
 
 Add each source folder, choose the output root, then select an engine and file
 formats. The GUI includes a preview, progress reporting, cancellation, and

@@ -263,7 +263,12 @@ def _load_engine(engine: str) -> Any:
             import pyarrow
 
             return pyarrow
-        return importlib.import_module("cudf")
+        cudf = importlib.import_module("cudf")
+        try:  # let files larger than VRAM spill to host memory instead of failing
+            cudf.set_option("spill", True)
+        except Exception:
+            pass
+        return cudf
     except Exception as exc:
         install_hint = {
             "pandas": "Install pandas to use --engine pandas.",
@@ -474,8 +479,13 @@ def convert_one(
     backend: Any,
     *,
     overwrite: bool = False,
+    fallback: tuple[str, Any] | None = None,
 ) -> str:
-    """Convert one file using a temporary file so failed writes are not published."""
+    """Convert one file using a temporary file so failed writes are not published.
+
+    Returns "converted", "skipped", or "converted_cpu" when the GPU engine failed
+    on this file and ``fallback`` (an ``(engine, backend)`` pair) succeeded.
+    """
     if job.target.exists() and not overwrite:
         return "skipped"
 
@@ -487,9 +497,26 @@ def convert_one(
     )
     os.close(fd)
     temporary = Path(temporary_name)
+    used_fallback = False
     try:
-        data = read_data(job.source, job.input_format, engine, options, backend)
-        write_data(data, temporary, output_format, engine, options, backend)
+        try:
+            data = read_data(job.source, job.input_format, engine, options, backend)
+            write_data(data, temporary, output_format, engine, options, backend)
+        except Exception:
+            if (
+                fallback is None
+                or fallback[0] == engine
+                or job.input_format not in ENGINE_FORMATS[fallback[0]]
+                or output_format not in ENGINE_FORMATS[fallback[0]]
+            ):
+                raise
+            data = None  # drop GPU buffers before retrying on the CPU
+            cpu_data = read_data(job.source, job.input_format, fallback[0], options, fallback[1])
+            write_data(cpu_data, temporary, output_format, fallback[0], options, fallback[1])
+            used_fallback = True
+        finally:
+            data = None
+        result = "converted_cpu" if used_fallback else "converted"
         if overwrite:
             os.replace(temporary, job.target)
         else:
@@ -498,7 +525,7 @@ def convert_one(
             if job.target.exists():
                 return "skipped"
             os.replace(temporary, job.target)
-        return "converted"
+        return result
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -547,6 +574,12 @@ def main(argv: list[str] | None = None) -> int:
         header=args.header,
         json_lines=args.json_lines,
     )
+    fallback = None
+    if args.engine == "cudf":
+        try:
+            fallback = ("pandas", _load_engine("pandas"))
+        except RuntimeError:
+            pass
     converted = skipped = failed = 0
     for index, job in enumerate(jobs, start=1):
         try:
@@ -557,11 +590,13 @@ def main(argv: list[str] | None = None) -> int:
                 options,
                 backend,
                 overwrite=args.overwrite,
+                fallback=fallback,
             )
-            if result == "converted":
+            if result in {"converted", "converted_cpu"}:
                 converted += 1
+                note = " (GPU failed, used CPU)" if result == "converted_cpu" else ""
                 print(
-                    f"[{index}/{len(jobs)}] Converted: {job.source} -> {job.target}",
+                    f"[{index}/{len(jobs)}] Converted{note}: {job.source} -> {job.target}",
                     flush=True,
                 )
             else:
