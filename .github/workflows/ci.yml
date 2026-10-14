@@ -18,13 +18,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
       - run: uv sync --locked
@@ -46,11 +46,11 @@ jobs:
           - os: macos-latest
             target: macos
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
       - run: uv sync --locked --extra packaging --extra excel
@@ -70,21 +70,21 @@ jobs:
 
       - name: Upload Windows build
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: df2pq-windows-x86_64
           path: df2pq-windows-x86_64.zip
           if-no-files-found: error
       - name: Upload macOS build
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: df2pq-macos
           path: df2pq-macos.zip
           if-no-files-found: error
       - name: Upload Linux build
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: df2pq-linux-x86_64
           path: df2pq-linux-x86_64.tar.gz
@@ -98,12 +98,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: df2pq-*
           path: release-assets
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
         env:
