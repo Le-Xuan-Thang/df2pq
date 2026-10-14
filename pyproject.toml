@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
+    "nicegui>=3.18.0",
     "pandas>=2.2",
     "pyarrow>=16.0",
 ]
@@ -26,11 +27,15 @@ Repository = "https://github.com/Le-Xuan-Thang/df2pq"
 Issues = "https://github.com/Le-Xuan-Thang/df2pq/issues"
 
 [project.scripts]
-df2pq = "df2pq.app:main"
+df2pq = "df2pq.web:main"
+df2pq-tk = "df2pq.app:main"
 df2pq-convert = "df2pq.converter:main"
 df2pq-headerless-csv = "convert_headerless_csv_to_parquet:main"
 df2pq-check = "check_parquet:main"
 df2pq-build = "build_portable:main"
+
+[tool.setuptools.package-data]
+df2pq = ["CHANGELOG.md"]
 
 [tool.setuptools]
 packages = ["df2pq"]
