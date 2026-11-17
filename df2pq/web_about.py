@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import subprocess
-import sys
 from typing import Any
 
 from nicegui import app, run, ui
@@ -16,11 +15,16 @@ from .updates import (
     Release,
     UpdateError,
     apply_git_update,
+    apply_package_update,
+    can_prompt_for_admin,
     changelog_text,
     current_version,
     fetch_latest,
     install_kind,
     is_newer,
+    manual_install_command,
+    restart_command,
+    system_env,
     update_command,
 )
 
@@ -29,6 +33,8 @@ KIND_LABELS = {
     "git": "Source checkout (git)",
     "package": "Python package install",
     "portable": "Portable build",
+    "rpm": "Installed with the RPM package",
+    "deb": "Installed with the DEB package",
 }
 
 
@@ -114,20 +120,81 @@ async def show_about(settings: Settings, tab: str = "changelog", on_checked: Any
                 ui.button("Open release page", icon="open_in_new",
                           on_click=lambda: ui.navigate.to(release.url, new_tab=True)
                           ).props("outline no-caps")
-                if kind == "git":
+                if kind == "git" or (kind in ("rpm", "deb") and can_prompt_for_admin()):
                     ui.button("Update now", icon="system_update_alt",
-                              on_click=lambda: apply_git()).props(
+                              on_click=lambda: apply_git() if kind == "git"
+                              else apply_package(release)).props(
                         "unelevated no-caps color=primary text-color=black")
-            if kind == "portable":
+            if kind in ("rpm", "deb"):
+                if can_prompt_for_admin():
+                    ui.label("Downloads the new package, checks it against the published "
+                             "checksum and installs it; your system will ask for an "
+                             "administrator password.").classes("df-muted text-caption")
+                else:
+                    copy_command(manual_install_command(kind, release),
+                                 "Download the package from the release page, then run:")
+            elif kind == "portable":
                 ui.label("Download the new build from the release page and replace this "
                          "folder.").classes("df-muted text-caption")
             elif kind == "package":
-                command = update_command(kind)
-                with ui.row().classes("w-full items-center no-wrap gap-2"):
-                    ui.label(command).classes("df-log grow px-3 py-2")
-                    ui.button(icon="content_copy", on_click=lambda: (
-                        ui.run_javascript(f"navigator.clipboard.writeText({json.dumps(command)})"),
-                        ui.notify("Command copied"))).props("flat round dense")
+                copy_command(update_command(kind))
+
+    def copy_command(command: str, caption: str = "") -> None:
+        if caption:
+            ui.label(caption).classes("df-muted text-caption")
+        with ui.row().classes("w-full items-center no-wrap gap-2"):
+            ui.label(command).classes("df-log grow px-3 py-2")
+            ui.button(icon="content_copy", on_click=lambda: (
+                ui.run_javascript(f"navigator.clipboard.writeText({json.dumps(command)})"),
+                ui.notify("Command copied"))).props("flat round dense")
+
+    def show_failure(error: Exception) -> None:
+        result.clear()
+        with result:
+            ui.label("Update failed").classes("text-red-400 font-medium")
+            text = str(error) if isinstance(error, UpdateError) else \
+                f"{type(error).__name__}: {error}"
+            ui.label(text).classes("df-log px-3 py-2 w-full").style("white-space:pre-wrap")
+
+    def show_updated(lines: list[str]) -> None:
+        result.clear()
+        with result:
+            ui.label("✓  Updated. Restart df2pq to use the new version.").classes(
+                "text-green-400 font-medium")
+            ui.label("\n".join(lines)).classes("df-log px-3 py-2 w-full").style(
+                "white-space:pre-wrap")
+            ui.button("Restart df2pq", icon="restart_alt", on_click=restart).props(
+                "unelevated no-caps color=primary text-color=black")
+
+    async def apply_package(release: Release) -> None:
+        state = {"done": 0, "total": 0}
+        result.clear()
+        with result:
+            status = ui.label("Downloading the update…").classes("df-muted")
+            bar = ui.linear_progress(value=0, show_value=False, size="8px").props(
+                "rounded color=primary track-color=grey-9")
+
+        def tick() -> None:
+            if state["total"]:
+                bar.set_value(state["done"] / state["total"])
+                status.set_text(f"Downloading the update… {state['done'] / 1e6:.0f} / "
+                                f"{state['total'] / 1e6:.0f} MB")
+            if state["total"] and state["done"] >= state["total"]:
+                status.set_text("Installing — enter your password in the system dialog…")
+                bar.props("indeterminate")
+
+        with result:  # the clicked button was just removed; attach the timer here
+            timer = ui.timer(0.3, tick)
+        try:
+            lines = await run.io_bound(
+                apply_package_update, release, kind,
+                lambda done, total: state.update(done=done, total=total))
+        except Exception as exc:  # shown to the user, including unexpected errors
+            timer.cancel()
+            show_failure(exc)
+            return
+        timer.cancel()
+        show_updated(lines)
 
     async def do_check() -> None:
         check_btn.set_enabled(False)
@@ -148,29 +215,16 @@ async def show_about(settings: Settings, tab: str = "changelog", on_checked: Any
             ui.spinner(size="sm")
         try:
             lines = await run.io_bound(apply_git_update)
-        except UpdateError as exc:
-            result.clear()
-            with result:
-                ui.label("Update failed").classes("text-red-400 font-medium")
-                ui.label(str(exc)).classes("df-log px-3 py-2 w-full").style("white-space:pre-wrap")
-            return
-        except Exception as exc:  # unexpected: show it instead of silently failing
-            result.clear()
-            with result:
-                ui.label(f"Update failed: {type(exc).__name__}: {exc}").classes("text-red-400")
+        except Exception as exc:  # shown to the user, including unexpected errors
+            show_failure(exc)
             return
         status.set_text("")
-        result.clear()
-        with result:
-            ui.label("✓  Updated. Restart df2pq to use the new version.").classes(
-                "text-green-400 font-medium")
-            ui.label("\n".join(lines)).classes("df-log px-3 py-2 w-full").style(
-                "white-space:pre-wrap")
-            ui.button("Restart df2pq", icon="restart_alt", on_click=restart).props(
-                "unelevated no-caps color=primary text-color=black")
+        show_updated(lines)
 
     def restart() -> None:
-        subprocess.Popen([sys.executable, "-m", "df2pq"], stdin=subprocess.DEVNULL)
+        # The packaged app is its own executable; "python -m df2pq" only works from source.
+        subprocess.Popen(restart_command(), stdin=subprocess.DEVNULL, start_new_session=True,
+                         env=system_env())
         app.shutdown()
 
     check_btn.on_click(do_check)

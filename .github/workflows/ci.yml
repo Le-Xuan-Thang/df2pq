@@ -126,6 +126,10 @@ jobs:
           pattern: df2pq-*
           path: release-assets
           merge-multiple: true
+      - name: Publish checksums
+        # The in-app updater only installs a package whose SHA-256 matches this list.
+        working-directory: release-assets
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v3.0.3
         with:
           files: release-assets/*

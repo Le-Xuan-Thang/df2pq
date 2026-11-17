@@ -6,6 +6,17 @@ All notable changes to df2pq are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Update now** for RPM and DEB installs: the app downloads the new package,
+  checks it against the release's `SHA256SUMS` and installs it with the system
+  package manager after the usual administrator password prompt (`pkexec`).
+  Without a graphical password prompt it shows the command to run instead.
+  Releases now publish `SHA256SUMS`.
+
+### Fixed
+- **Restart df2pq** after an update now starts the packaged app; it used to run
+  `python -m df2pq`, which only works from a source checkout.
+
 ## [0.2.0] — 2026-11-17
 
 ### Added
