@@ -6,6 +6,8 @@ All notable changes to df2pq are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-17
+
 ### Added
 - The window is split into **Paths** (source and destination folders) and
   **Analysis** tabs. Analysis shows a sample file as stored (A, left) next to
