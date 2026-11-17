@@ -6,6 +6,8 @@ All notable changes to df2pq are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-17
+
 ### Added
 - Automatic NVIDIA GPU package download and self-test for packaged and source
   apps, using an app-managed Python/cuDF environment and Windows WSL2 support.
