@@ -4,6 +4,19 @@ All notable changes to df2pq are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Automatic NVIDIA GPU package download and self-test for packaged and source
+  apps, using an app-managed Python/cuDF environment and Windows WSL2 support.
+- GPU setup progress with live download percentage and MB per package, failure
+  details, retry, and terminal GPU diagnostics.
+
+### Fixed
+- cuDF conversions no longer start a new GPU process for every file. One worker
+  stays loaded for the session and is warmed by the startup GPU check, cutting
+  roughly 3–4 seconds of cuDF import and CUDA start-up from each file.
+
 ## [0.1.0] — First release
 
 ### Added

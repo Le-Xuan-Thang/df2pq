@@ -133,8 +133,33 @@ uv sync --extra packaging --extra excel
 uv run df2pq-build
 ```
 
-The portable bundles use the CPU backends. cuDF remains an optional install for
-compatible CUDA/RAPIDS systems and is shown in the GUI only when available.
+Packaged and source apps automatically detect working NVIDIA GPUs at startup.
+When GPU packages are missing, the app downloads a private Python 3.12 environment,
+cuDF and CUDA runtime packages (several GB), then tests GPU computation before
+showing the GPU engine. CPU conversion remains available during setup. Later
+launches reuse the downloaded environment. An NVIDIA driver must already be
+installed; the app does not change system drivers or require administrator access.
+CUDA 13 is selected for driver 580.65.06 or newer; supported older drivers use
+CUDA 12 (minimum 525.60.13). macOS and non-NVIDIA GPUs use CPU engines.
+
+On Windows, cuDF runs through the default **WSL2 Linux distribution**. Install and
+initialize it first (`wsl --install -d Ubuntu`); the app then downloads and manages
+the GPU environment inside WSL2 and translates Windows file paths automatically.
+Files must be accessible from WSL2. WSL1 and native Windows cuDF are unsupported.
+
+Setup progress appears beside the GPU indicator, with a progress bar, the current
+package’s download percentage and downloaded/total MB. Percentages are per package;
+dependency resolution and installation show an indeterminate bar. Failures appear in the activity
+log and indicator tooltip, with a **Retry GPU setup** button. Detailed package
+installation output is saved in `setup.log` in the GPU data directory:
+`~/.local/share/df2pq/gpu` on Linux (`XDG_DATA_HOME` is respected), or
+`%LOCALAPPDATA%/df2pq/gpu` on Windows. Windows runtime packages are stored under
+`~/.local/share/df2pq/gpu` inside WSL2. Fix network, disk-space or driver errors
+and retry; GPU mode is enabled only after the self-test passes.
+
+For terminal diagnostics, run `df2pq --gpu-status` (no downloads) or
+`df2pq --setup-gpu` (install/repair and test). Rebuild the installers to include
+this automatic setup feature; already downloaded older installers are unchanged.
 
 The project also includes a verified converter for headerless nine-column
 numeric CSV files (`convert_headerless_csv_to_parquet.py`), a compatibility

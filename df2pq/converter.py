@@ -263,6 +263,13 @@ def _load_engine(engine: str) -> Any:
             import pyarrow
 
             return pyarrow
+        if __package__:
+            from .gpu_runtime import managed_backend
+            managed = managed_backend()
+        else:
+            managed = None
+        if managed is not None:
+            return managed
         cudf = importlib.import_module("cudf")
         try:  # let files larger than VRAM spill to host memory instead of failing
             cudf.set_option("spill", True)
@@ -488,6 +495,18 @@ def convert_one(
     """
     if job.target.exists() and not overwrite:
         return "skipped"
+
+    if engine == "cudf" and callable(getattr(type(backend), "convert_job", None)):
+        try:
+            return backend.convert_job(job, output_format, options, overwrite=overwrite)
+        except Exception:
+            if (fallback is None or fallback[0] == engine
+                    or job.input_format not in ENGINE_FORMATS[fallback[0]]
+                    or output_format not in ENGINE_FORMATS[fallback[0]]):
+                raise
+            result = convert_one(job, output_format, fallback[0], options, fallback[1],
+                                 overwrite=overwrite)
+            return "converted_cpu" if result == "converted" else result
 
     job.target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
