@@ -90,8 +90,9 @@ class PackageUpdateTests(unittest.TestCase):
         self.assertTrue(calls[0][4].endswith("df2pq-0.3.0-1.x86_64.rpm"))
         self.assertFalse(Path(calls[0][4]).exists())  # the temporary download is removed
         self.assertIn("Installed df2pq-0.3.0-1.x86_64.rpm.", log)
-        self.assertEqual(updates.install_command("deb", Path("/t/p.deb")),
-                         ["pkexec", "apt-get", "install", "-y", "/t/p.deb"])
+        package = Path("/t/p.deb")
+        self.assertEqual(updates.install_command("deb", package),
+                         ["pkexec", "apt-get", "install", "-y", str(package)])
 
     def test_password_prompt_outcomes_are_explained(self):
         rel, opener = release()
