@@ -64,7 +64,7 @@ def summarize_folder(
                         if recursive and not entry.name.startswith("."):
                             stack.append(Path(entry.path))
                         continue
-                    if not entry.is_file():
+                    if not entry.is_file() or entry.name.startswith("."):
                         continue
                     fmt = _SUFFIX_TO_FORMAT.get(Path(entry.name).suffix.casefold())
                     if fmt is None:

@@ -118,14 +118,17 @@ class Runtime:
                 server = _servers[tuple(command)] = WorkerServer(command)
         return server.request(request, timeout)
 
-    def convert_job(self, job, output_format, options, *, overwrite):
+    def convert_job(self, job, output_format, options, *, overwrite, notes=None):
         payload = asdict(job)
         for key in ("source_root", "source", "target"):
             payload[key] = str(Path(payload[key]).resolve())
         # The worker translates Windows paths itself, without a wsl.exe call per path.
-        return self.worker({"action": "convert", "job": payload, "wsl": self.wsl,
-                            "output_format": output_format, "options": asdict(options),
-                            "overwrite": overwrite})
+        reply = self.worker({"action": "convert", "job": payload, "wsl": self.wsl,
+                             "output_format": output_format, "options": asdict(options),
+                             "overwrite": overwrite})
+        if notes is not None:
+            notes.extend(reply["notes"])
+        return reply["status"]
 
 
 class WorkerServer:
@@ -186,7 +189,9 @@ class WorkerServer:
                 raise self._failure("GPU worker stopped unexpectedly")
         reply = json.loads(line)
         if not reply["ok"]:
-            raise RuntimeError(reply["error"])
+            error = RuntimeError(reply["error"])
+            error.damaged_rows = reply.get("damaged_rows", False)  # no CPU retry for bad data
+            raise error
         return reply["result"]
 
 

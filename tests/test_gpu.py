@@ -146,9 +146,9 @@ class GpuTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(root / "gpu_worker.py")],
                                     input=stdin, capture_output=True, text=True, check=True)
             replies = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(replies[0], {"ok": True, "result": "converted"})
+            self.assertEqual(replies[0], {"ok": True, "result": {"status": "converted", "notes": []}})
             self.assertFalse(replies[1]["ok"])
-            self.assertEqual(replies[2], {"ok": True, "result": "converted"})
+            self.assertEqual(replies[2], {"ok": True, "result": {"status": "converted", "notes": []}})
             self.assertEqual(pd.read_parquet(root / "out.parquet")["x"].tolist(), [1, 2])
             self.assertEqual(pd.read_parquet(root / "b.parquet")["x"].tolist(), [1, 2])
 

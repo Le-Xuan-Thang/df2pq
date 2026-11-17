@@ -82,8 +82,9 @@ class ConvertDataTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(main(arguments), 0)
             table = pq.read_table(output / "source_csv" / "record.parquet")
-            self.assertEqual(table.column_names, ["f0", "f1"])
-            self.assertEqual(table.column("f1").to_pylist(), [11.70, 11.71])
+            # Headerless columns are numbered like pandas and cuDF number them.
+            self.assertEqual(table.column_names, ["0", "1"])
+            self.assertEqual(table.column("1").to_pylist(), [11.70, 11.71])
 
     def test_pyarrow_ipc_output_can_be_read_back(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

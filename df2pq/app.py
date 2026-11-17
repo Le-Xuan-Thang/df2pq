@@ -676,13 +676,15 @@ class ConverterApp:
                     self.events.put(("cancelled", (converted, skipped, failed)))
                     return
                 try:
+                    notes: list[str] = []
                     result = convert_one(job, output_format, engine, options, backend,
-                                         overwrite=overwrite, fallback=fallback)
+                                         overwrite=overwrite, fallback=fallback, notes=notes)
                     if result == "skipped":
                         skipped += 1
                     else:
                         converted += 1
-                    self.events.put(("file", (index, len(jobs), job, result, None)))
+                    self.events.put(("file", (index, len(jobs), job, result,
+                                              "; ".join(notes) or None)))
                 except Exception as exc:
                     failed += 1
                     self.events.put(("file", (index, len(jobs), job, "failed",
@@ -747,6 +749,8 @@ class ConverterApp:
             self._append_log(f"DONE·CPU {job.target}  (GPU failed on this file)", "cpu")
         else:
             self._append_log(f"DONE     {job.target}", "done")
+        if error and result != "failed":
+            self._append_log(f"         {error}", "cpu")
 
     def _finish_run(self, message: str, tone: str) -> None:
         self.progress.stop()
