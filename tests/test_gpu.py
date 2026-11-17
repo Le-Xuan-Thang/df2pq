@@ -106,7 +106,7 @@ class GpuTests(unittest.TestCase):
             self.assertEqual(result, "converted_cpu")
             self.assertEqual(pd.read_parquet(job.target).to_dict("list"), {"x": [1], "y": [2]})
             payload = runtime.worker.call_args.args[0]
-            self.assertEqual(payload["job"]["source"], str(source))
+            self.assertEqual(payload["job"]["source"], str(source.resolve()))
             self.assertEqual(payload["options"]["header"], True)
             # Existing files must never launch a worker or get overwritten.
             runtime.worker.reset_mock()
