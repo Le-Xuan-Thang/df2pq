@@ -19,7 +19,7 @@ from .converter import (
     convert_one,
 )
 from .folder_picker import FolderPicker
-from .gpu import GpuStatus, probe_cudf
+from .gpu import GpuStatus, initialize_gpu
 from .scan import FolderSummary, human_size, summarize_folder
 from .settings import Settings
 from .theme import C, Card, Fonts, apply_theme
@@ -80,6 +80,7 @@ class ConverterApp:
         self.advanced_open = False
         self.config_widgets: list[tk.Widget] = []
         self.gpu: GpuStatus | None = None
+        self.gpu_busy = False
         self.output_auto = True
         self.run_started = 0.0
 
@@ -147,6 +148,7 @@ class ConverterApp:
                   "never modified.", style="Subtitle.TLabel").grid(row=1, column=0, sticky="w")
         self.gpu_pill = ttk.Label(header, text="Checking GPU…", style="Busy.Pill.TLabel")
         self.gpu_pill.grid(row=0, column=1, sticky="e")
+        self.gpu_pill.bind("<Button-1>", lambda _event: self._retry_gpu())
 
         self._build_sources(page)
         right = ttk.Frame(page, style="App.TFrame")
@@ -358,8 +360,19 @@ class ConverterApp:
         self.root.bind("<Control-Return>", lambda _e: self._start(dry_run=False))
 
     # ---- engine / format state -----------------------------------------
+    def _retry_gpu(self) -> None:
+        if not self.gpu_busy and self.gpu is not None and not self.gpu.available:
+            threading.Thread(target=self._probe_gpu, name="df2pq-gpu-setup", daemon=True).start()
+
     def _probe_gpu(self) -> None:
-        self.events.put(("gpu", probe_cudf()))
+        if self.gpu_busy:
+            return
+        self.gpu_busy = True
+        try:
+            self.events.put(("gpu", initialize_gpu(
+                lambda message: self.events.put(("gpu_progress", message)))))
+        finally:
+            self.gpu_busy = False
 
     def _refresh_engine_choices(self) -> None:
         labels = [label for label, engine in ENGINE_LABELS.items()
@@ -375,6 +388,9 @@ class ConverterApp:
         else:
             self.gpu_pill.configure(text="●  CPU only", style="Cpu.Pill.TLabel")
             ENGINE_HINTS["cudf"] = status.detail
+            if status.device:
+                self.gpu_pill.configure(text=f"●  GPU setup needed · {status.device}")
+                self._append_log(status.detail, "fail")
         self._refresh_engine_choices()
         saved = self.settings.get("engine", "cudf")
         if status.available and saved == "cudf" and self.engine_var.get() == "Pandas · CPU":
@@ -686,6 +702,12 @@ class ConverterApp:
             self.root.after(80, self._poll_events)
         except tk.TclError:
             pass
+
+    def _on_gpu_progress(self, message: str) -> None:
+        self.gpu_pill.configure(text=message, style="Busy.Pill.TLabel")
+        from .gpu_runtime import download_percent
+        if download_percent(message) is None:
+            self._append_log(message, "info")
 
     def _on_gpu(self, status: GpuStatus) -> None:
         self._on_gpu_probed(status)

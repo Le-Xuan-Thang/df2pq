@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import importlib.util
 import shutil
 import subprocess
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -17,7 +18,13 @@ class GpuStatus:
 
 def gpu_device_name() -> str:
     """Return e.g. 'NVIDIA GeForce GTX 1650 · 4 GB', or '' when no NVIDIA GPU is visible."""
+    from .gpu_runtime import child_env
+
     exe = shutil.which("nvidia-smi")
+    if exe is None:
+        from pathlib import Path
+        candidate = Path("C:/Windows/System32/nvidia-smi.exe")
+        exe = str(candidate) if candidate.is_file() else None
     if exe is None:
         return ""
     try:
@@ -27,6 +34,7 @@ def gpu_device_name() -> str:
             text=True,
             timeout=4,
             check=True,
+            env=child_env(),
         ).stdout.strip().splitlines()
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -41,19 +49,42 @@ def gpu_device_name() -> str:
 
 
 def probe_cudf() -> GpuStatus:
-    """Import cuDF and run a tiny kernel; slow (seconds), so call from a thread."""
-    device = gpu_device_name()
-    try:
-        if importlib.util.find_spec("cudf") is None:
-            return GpuStatus(False, "cuDF is not installed (uv sync --extra gpu-cu13)", device)
-    except (ImportError, ValueError):
-        return GpuStatus(False, "cuDF is not installed (uv sync --extra gpu-cu13)", device)
-    try:
-        import cudf
+    """Test an existing local or app-managed GPU backend without downloading."""
+    from .gpu_runtime import managed_backend
 
-        if int(cudf.Series([1, 2, 3]).sum()) != 6:
-            raise RuntimeError("cuDF returned a wrong result")
-    except Exception as exc:  # broken CUDA install, no driver, unsupported GPU...
-        reason = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
-        return GpuStatus(False, f"cuDF cannot run: {reason[:140]}", device)
-    return GpuStatus(True, "GPU ready", device or "CUDA GPU")
+    device = gpu_device_name()
+    reason = "GPU packages have not been installed" if device else "No working NVIDIA GPU driver detected"
+    try:
+        runtime = managed_backend()
+        if runtime is not None:
+            try:
+                runtime.worker({"action": "probe"}, timeout=120)
+            except Exception as exc:
+                return GpuStatus(False, str(exc), device)
+            return GpuStatus(True, "GPU ready", device or "CUDA GPU")
+    except Exception as exc:
+        reason = str(exc)
+    try:
+        if importlib.util.find_spec("cudf") is not None:
+            import cudf
+
+            if int(cudf.Series([1, 2, 3]).sum()) != 6:
+                raise RuntimeError("cuDF returned a wrong result")
+            return GpuStatus(True, "GPU ready", device or "CUDA GPU")
+    except Exception as exc:
+        reason = str(exc)
+    return GpuStatus(False, reason, device)
+
+
+def initialize_gpu(progress: Callable[[str], None] = lambda message: None) -> GpuStatus:
+    """Automatically provision GPU support when NVIDIA hardware is visible."""
+    from .gpu_runtime import install
+
+    status = probe_cudf()
+    if status.available or not status.device:
+        return status
+    try:
+        install(progress)
+        return GpuStatus(True, "GPU ready", status.device)
+    except Exception as exc:
+        return GpuStatus(False, f"GPU setup failed: {exc}", status.device)

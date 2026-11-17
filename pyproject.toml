@@ -35,7 +35,7 @@ df2pq-check = "check_parquet:main"
 df2pq-build = "build_portable:main"
 
 [tool.setuptools.package-data]
-df2pq = ["CHANGELOG.md"]
+df2pq = ["CHANGELOG.md", "converter.py", "gpu_worker.py"]
 
 [tool.setuptools]
 packages = ["df2pq"]

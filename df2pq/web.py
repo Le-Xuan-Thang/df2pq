@@ -17,7 +17,8 @@ from typing import Any
 from nicegui import Client, app, run, ui
 
 from .converter import ENGINE_FORMATS, FORMAT_SUFFIXES, IOOptions
-from .gpu import GpuStatus, probe_cudf
+from .gpu import GpuStatus, initialize_gpu, probe_cudf
+from .gpu_runtime import download_percent
 from .runner import BatchRunner
 from .scan import FolderSummary, fuzzy_match, human_size, places, summarize_folder
 from .settings import Settings
@@ -107,6 +108,8 @@ class State:
         self.summaries: dict[tuple[Path, bool], FolderSummary] = {}
         self.gpu: GpuStatus | None = None
         self.gpu_shown = False
+        self.gpu_busy = False
+        self.gpu_progress = "Checking GPU…"
         self.engine = "pandas"
         self.input_format = "auto"
         self.output_format = self.settings.get("output_format", "parquet")
@@ -121,6 +124,21 @@ class State:
         self.overwrite = False
         self.run_started = 0.0
         self.busy = False
+
+    def setup_gpu(self) -> None:
+        if self.gpu_busy:
+            return
+        self.gpu_busy = True
+        self.gpu_progress = "Checking GPU…"
+
+        def work():
+            try:
+                self.gpu = initialize_gpu(lambda message: setattr(self, "gpu_progress", message))
+            finally:
+                self.gpu_busy = False
+                self.gpu_shown = False
+
+        threading.Thread(target=work, name="df2pq-gpu-setup", daemon=True).start()
 
     def engine_options(self) -> dict[str, str]:
         gpu_ok = self.gpu is not None and self.gpu.available
@@ -356,6 +374,12 @@ def index() -> None:
                           on_click=lambda: show_about(S.settings, on_checked=sync_badge)
                           ).props("flat no-caps dense").classes("df-version")
                 w["gpu"] = ui.label("Checking GPU…").classes("df-pill df-pill-busy")
+                w["gpu_retry"] = ui.button("Retry GPU setup", icon="download",
+                                            on_click=S.setup_gpu).props("flat dense")
+                w["gpu_retry"].set_visibility(False)
+
+        w["gpu_download"] = ui.linear_progress(value=0).props("color=amber").classes("w-full mb-4")
+        w["gpu_download"].set_visibility(False)
 
         with ui.row().classes("w-full no-wrap gap-5 items-stretch"):
             # 1 — sources
@@ -726,14 +750,18 @@ def index() -> None:
 
     def show_gpu() -> None:
         g = S.gpu
+        w["gpu_download"].set_visibility(False)
         S.gpu_shown = True
         if g.available:
             w["gpu"].set_text(f"●  GPU ready · {g.device}")
             w["gpu"].classes(replace="df-pill df-pill-gpu")
         else:
-            w["gpu"].set_text("●  CPU only")
+            w["gpu"].set_text(f"●  GPU setup needed · {g.device}" if g.device else "●  CPU only")
             w["gpu"].classes(replace="df-pill df-pill-cpu")
             w["gpu"].tooltip(g.detail)
+        w["gpu_retry"].set_visibility(bool(g.device) and not g.available)
+        if not g.available and g.device:
+            w["log"].push(g.detail, classes="text-amber-400")
         opts = S.engine_options()
         saved = S.settings.get("engine", "cudf")
         target = "cudf" if g.available and saved == "cudf" else S.engine
@@ -744,7 +772,19 @@ def index() -> None:
         refresh()
 
     def poll() -> None:
-        if S.gpu is not None and not S.gpu_shown:
+        if S.gpu_busy:
+            message = S.gpu_progress
+            percent = download_percent(message)
+            w["gpu_download"].set_visibility(True)
+            if percent is None:
+                w["gpu_download"].props("indeterminate")
+            else:
+                w["gpu_download"].props(remove="indeterminate")
+                w["gpu_download"].set_value(percent / 100)
+            w["gpu"].set_text(message)
+            w["gpu"].classes(replace="df-pill df-pill-busy")
+            w["gpu_retry"].set_visibility(False)
+        elif S.gpu is not None and not S.gpu_shown:
             show_gpu()
         try:
             for _ in range(200):
@@ -805,14 +845,22 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=0, help="Port to listen on (default: free port).")
     parser.add_argument("--no-window", action="store_true",
                         help="Only start the server and print its URL.")
+    gpu_mode = parser.add_mutually_exclusive_group()
+    gpu_mode.add_argument("--setup-gpu", action="store_true",
+                          help="Download and test GPU support, then exit.")
+    gpu_mode.add_argument("--gpu-status", action="store_true",
+                          help="Test existing GPU support without downloading, then exit.")
     args = parser.parse_args(argv)
+    if args.setup_gpu or args.gpu_status:
+        status = initialize_gpu(lambda message: print(message, flush=True)) if args.setup_gpu else probe_cudf()
+        print(f"{status.device or 'No NVIDIA GPU detected'}: {status.detail}", flush=True)
+        raise SystemExit(0 if status.available else 1)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}"
     use_window = not args.no_window
 
     def on_startup() -> None:
-        threading.Thread(target=lambda: setattr(state, "gpu", probe_cudf()),
-                         name="df2pq-gpu-probe", daemon=True).start()
+        state.setup_gpu()
         print(f"df2pq running at {url}", flush=True)
         if use_window:
             _open_window(url)
@@ -821,7 +869,7 @@ def main(argv: list[str] | None = None) -> None:
         if not use_window:
             return
         await asyncio.sleep(6)  # a page reload reconnects within this grace period
-        while state.runner.running:
+        while state.runner.running or state.gpu_busy:
             await asyncio.sleep(3)
         if not any(c.has_socket_connection for c in Client.instances.values()):
             state.settings.save()
