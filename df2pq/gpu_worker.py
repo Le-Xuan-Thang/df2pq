@@ -31,9 +31,11 @@ def handle(request, cudf):
     job, wsl = request["job"], request.get("wsl", False)
     job = ConversionJob(linux_path(job["source_root"], wsl), linux_path(job["source"], wsl),
                         job["input_format"], linux_path(job["target"], wsl))
-    return convert_one(job, request["output_format"], "cudf",
-                       IOOptions(**request["options"]), cudf,
-                       overwrite=request["overwrite"])
+    notes = []
+    status = convert_one(job, request["output_format"], "cudf",
+                         IOOptions(**request["options"]), cudf,
+                         overwrite=request["overwrite"], notes=notes)
+    return {"status": status, "notes": notes}
 
 
 def main():
@@ -49,7 +51,8 @@ def main():
         try:
             reply = {"ok": True, "result": handle(json.loads(line), cudf)}
         except Exception as exc:
-            reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                     "damaged_rows": bool(getattr(exc, "damaged_rows", False))}
         responses.write(json.dumps(reply) + "\n")
         responses.flush()
 

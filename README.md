@@ -47,10 +47,37 @@ CPU automatically. cuDF needs several GB of disk, so if `uv sync --extra
 gpu-cu13` fails with "No space left on device", free space on the drive that
 holds `.venv` and re-run it.
 
-Add each source folder, choose the output root, then select an engine and file
-formats. The GUI includes a preview, progress reporting, cancellation, and
-options for separators, headers, recursion, limits, JSON Lines, and overwriting.
-The output layout is `OUTPUT_ROOT/SOURCE_FOLDER_NAME/...`.
+The window has three tabs:
+
+1. **Paths** — add source folders (subfolders optional) and choose the output
+   root. The output layout is `OUTPUT_ROOT/SOURCE_FOLDER_NAME/...`. Hidden files,
+   such as macOS `._` files, are skipped.
+2. **Analysis** — pick a sample file and see it as stored (A) next to what the
+   output will contain (B: column names, types, first rows). Read options
+   (format, separator, header, JSON Lines, damaged rows) sit on the A side and
+   write options on the B side; the preview updates as you change them, and
+   warnings flag settings that look wrong, such as a data row about to become
+   the column names.
+3. **Run** — preview the plan, convert, or cancel. Set **Parallel files** to
+   convert several files at once with PyArrow or pandas. Before converting, the
+   first file is checked and you are asked to confirm if something looks wrong.
+   The log lists skipped, ignored and damaged files with line numbers.
+
+**Damaged rows** (CSV/TSV rows with the wrong number of fields or zero bytes,
+typically a recording cut off mid-write) are dropped and reported by default;
+they can instead be kept as empty values or make the file fail.
+
+### Choosing an engine
+
+| Situation | Choice |
+|---|---|
+| Many files | PyArrow with Parallel files 8–32 (5–12× faster than one at a time) |
+| Few large files | cuDF on the GPU, or PyArrow with Parallel files = number of files |
+| Values must match the text exactly | PyArrow or pandas (cuDF can differ in the last digit) |
+| Excel or Pickle | pandas |
+
+Measurements, the method and how to reproduce them are in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Command-line usage
 

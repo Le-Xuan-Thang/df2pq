@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import importlib
+import io
 import os
 from pathlib import Path
 import sys
@@ -64,7 +65,13 @@ class IOOptions:
     input_separator: str | None = None
     output_separator: str | None = None
     header: bool = True
-    json_lines: bool = False
+    json_lines: bool = False  # read .json files as one record per line
+    bad_rows: str = "drop"  # damaged CSV/TSV rows: "drop", "keep" (as empty values) or "fail"
+
+
+BAD_ROW_POLICIES = ("drop", "keep", "fail")
+# Above this size the damaged-row scan is skipped to avoid holding the file in memory twice.
+DAMAGE_SCAN_LIMIT = 2 * 1024**3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,6 +170,16 @@ def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
+def _discover(root: Path, recursive: bool) -> list[Path]:
+    """Visible files below ``root``, sorted; hidden files and folders are skipped."""
+    found = []
+    for folder, folders, files in os.walk(root):
+        folders[:] = [] if not recursive else [d for d in folders if not d.startswith(".")]
+        found.extend(Path(folder, name) for name in files
+                     if not name.startswith(".") and Path(folder, name).is_file())
+    return sorted(found)
+
+
 def _format_for_path(path: Path) -> str | None:
     suffix = path.suffix.casefold()
     for file_format, suffixes in FORMAT_SUFFIXES.items():
@@ -180,8 +197,14 @@ def build_jobs(
     *,
     recursive: bool = True,
     limit: int | None = None,
+    ignored: list[tuple[Path, str]] | None = None,
 ) -> list[ConversionJob]:
-    """Discover files and map them to their mirrored output paths."""
+    """Discover files and map them to their mirrored output paths.
+
+    Hidden files and folders (names starting with ".", such as macOS "._" metadata)
+    are never converted. With auto-detection, files the engine cannot read are
+    left out and, when ``ignored`` is given, listed there with the reason.
+    """
     if output_format not in ENGINE_FORMATS[engine]:
         supported = ", ".join(sorted(ENGINE_FORMATS[engine]))
         raise ValueError(f"{engine} cannot write {output_format}; supported formats: {supported}")
@@ -213,8 +236,7 @@ def build_jobs(
     jobs: list[ConversionJob] = []
     targets: dict[Path, Path] = {}
     for root in roots:
-        candidates = root.rglob("*") if recursive else root.iterdir()
-        for source in sorted(path for path in candidates if path.is_file()):
+        for source in _discover(root, recursive):
             if input_format == "auto":
                 detected_format = _format_for_path(source)
             else:
@@ -226,6 +248,10 @@ def build_jobs(
             if detected_format is None:
                 continue
             if detected_format not in ENGINE_FORMATS[engine]:
+                if input_format == "auto":
+                    if ignored is not None:
+                        ignored.append((source, f"{engine} cannot read {detected_format} files"))
+                    continue
                 supported = ", ".join(sorted(ENGINE_FORMATS[engine]))
                 raise ValueError(
                     f"{engine} cannot read {detected_format} input ({source}); "
@@ -291,12 +317,103 @@ def _separator(file_format: str, configured: str | None) -> str:
     return "\t" if file_format == "tsv" else ","
 
 
+def _line_list(numbers: list[int]) -> str:
+    shown = ", ".join(f"{n:,}" for n in numbers[:3])
+    return shown + (f" and {len(numbers) - 3:,} more" if len(numbers) > 3 else "")
+
+
+def check_text_rows(path: Path, file_format: str, options: IOOptions) -> tuple[bytes | None, str]:
+    """Find damaged CSV/TSV rows before any engine parses the file.
+
+    A row is damaged when its field count differs from the first row's or it holds
+    NUL bytes; trailing NUL padding (left by an interrupted write) is removed.
+    Returns cleaned file contents (None when the file can be read as is) and a
+    note for the log. Raises ValueError under the "fail" policy.
+    """
+    if options.bad_rows not in BAD_ROW_POLICIES:
+        raise ValueError(f"Unknown damaged-row policy: {options.bad_rows}")
+    if path.stat().st_size > DAMAGE_SCAN_LIMIT:
+        return None, ""
+    import numpy as np
+
+    data = path.read_bytes()
+    end = len(data.rstrip(b"\0"))
+    notes = []
+    if end < len(data):
+        notes.append(f"removed {len(data) - end:,} trailing zero bytes")
+    if end == 0 or b'"' in data[:end]:
+        # Quoted fields may contain separators or line breaks; leave those files
+        # to the parser rather than miscount their fields.
+        return (data[:end] if notes else None), "; ".join(notes)
+    raw = np.frombuffer(data, dtype=np.uint8, count=end)
+    separator = ord(_separator(file_format, options.input_separator))
+    has_nuls = b"\0" in data[:end]
+    is_sep = raw == separator
+    # Fast path: when every line has the first line's field count, the totals
+    # agree. (A long and a short row could cancel out, but parsers reject long rows.)
+    first = data[:end].split(b"\n", 1)[0].rstrip(b"\r")
+    lines = int(np.count_nonzero(raw == 10)) + (data[end - 1:end] != b"\n")
+    if first and not has_nuls and int(np.count_nonzero(is_sep)) == first.count(
+            bytes([separator])) * lines:
+        return (data[:end] if notes else None), "; ".join(notes)
+    breaks = np.flatnonzero(raw == 10)
+    starts = np.concatenate(([0], breaks + 1))
+    stops = np.concatenate((breaks, [end]))
+    if starts[-1] == end:  # the file ends with a line break: no line after it
+        starts, stops = starts[:-1], stops[:-1]
+    count = len(starts)
+
+    def per_line(mask: Any) -> Any:
+        # One pass over the file: sum the matches between consecutive line starts.
+        return np.add.reduceat(mask.view(np.uint8), starts, dtype=np.int64)
+
+    blank = (stops - starts == 0) | ((stops - starts == 1) & (raw[np.maximum(stops - 1, 0)] == 13))
+    fields = per_line(is_sep) + 1
+    fields[stops - starts == 0] = 1  # reduceat reads one byte for empty lines
+    has_nul = per_line(raw == 0) > 0 if has_nuls else np.zeros(count, dtype=bool)
+    content = np.flatnonzero(~blank)
+    if len(content) == 0:
+        return (data[:end] if notes else None), "; ".join(notes)
+    expected = fields[content[0]]
+    short = ~blank & ~has_nul & (fields < expected)
+    damaged = ~blank & (has_nul | (fields > expected))
+    if options.bad_rows != "keep":
+        damaged |= short
+        short[:] = False
+    if not damaged.any() and not short.any():
+        return (data[:end] if notes else None), "; ".join(notes)
+    damaged_lines = (np.flatnonzero(damaged) + 1).tolist()
+    short_lines = (np.flatnonzero(short) + 1).tolist()
+    if options.bad_rows == "fail":
+        raise ValueError(f"{len(damaged_lines):,} damaged row(s) at line "
+                         f"{_line_list(damaged_lines)} (expected {expected} fields)")
+    lines = data[:end].split(b"\n")[:count]  # no empty piece after a final line break
+    pad = bytes([separator])
+    cleaned = []
+    for i, line in enumerate(lines):
+        if damaged[i]:
+            continue
+        if short[i]:
+            line = line.rstrip(b"\r") + pad * int(expected - fields[i])
+        cleaned.append(line)
+    if damaged_lines:
+        notes.append(f"dropped {len(damaged_lines):,} damaged row(s) at line "
+                     f"{_line_list(damaged_lines)}")
+    if short_lines:
+        notes.append(f"kept {len(short_lines):,} incomplete row(s) with empty values at line "
+                     f"{_line_list(short_lines)}")
+    # End with a line break: with CRLF files a final bare "\r" would otherwise be
+    # read as part of the last value by some parsers (cuDF).
+    return b"\n".join(cleaned) + b"\n", "; ".join(notes)
+
+
 def _read_pandas(path: Path, file_format: str, options: IOOptions, pd: Any) -> Any:
     if file_format in {"csv", "tsv"}:
         return pd.read_csv(
             path,
             sep=_separator(file_format, options.input_separator),
             header=0 if options.header else None,
+            float_precision="round_trip",  # the default parser can be off in the last digit
         )
     if file_format == "parquet":
         return pd.read_parquet(path)
@@ -346,7 +463,11 @@ def _read_pyarrow(path: Path, file_format: str, options: IOOptions, pa: Any) -> 
         parse_options = arrow_csv.ParseOptions(
             delimiter=_separator(file_format, options.input_separator)
         )
-        return arrow_csv.read_csv(path, read_options=read_options, parse_options=parse_options)
+        table = arrow_csv.read_csv(path, read_options=read_options, parse_options=parse_options)
+        if not options.header:
+            # Match pandas and cuDF, which number headerless columns 0, 1, 2…
+            table = table.rename_columns([str(i) for i in range(table.num_columns)])
+        return table
     if file_format == "parquet":
         import pyarrow.parquet as parquet
 
@@ -385,7 +506,7 @@ def _write_pandas(data: Any, path: Path, file_format: str, options: IOOptions) -
         data.to_json(
             path,
             orient="records",
-            lines=options.json_lines or file_format == "jsonl",
+            lines=file_format == "jsonl",
         )
     elif file_format == "orc":
         data.to_orc(path, index=False)
@@ -408,7 +529,7 @@ def _write_cudf(data: Any, path: Path, file_format: str, options: IOOptions) -> 
         data.to_json(
             path,
             orient="records",
-            lines=options.json_lines or file_format == "jsonl",
+            lines=file_format == "jsonl",
         )
     elif file_format == "orc":
         data.to_orc(path, index=False)
@@ -487,6 +608,7 @@ def convert_one(
     *,
     overwrite: bool = False,
     fallback: tuple[str, Any] | None = None,
+    notes: list[str] | None = None,
 ) -> str:
     """Convert one file using a temporary file so failed writes are not published.
 
@@ -498,15 +620,30 @@ def convert_one(
 
     if engine == "cudf" and callable(getattr(type(backend), "convert_job", None)):
         try:
-            return backend.convert_job(job, output_format, options, overwrite=overwrite)
-        except Exception:
+            return backend.convert_job(job, output_format, options, overwrite=overwrite,
+                                       notes=notes)
+        except Exception as exc:
             if (fallback is None or fallback[0] == engine
                     or job.input_format not in ENGINE_FORMATS[fallback[0]]
-                    or output_format not in ENGINE_FORMATS[fallback[0]]):
+                    or output_format not in ENGINE_FORMATS[fallback[0]]
+                    or getattr(exc, "damaged_rows", False)):
                 raise
             result = convert_one(job, output_format, fallback[0], options, fallback[1],
-                                 overwrite=overwrite)
+                                 overwrite=overwrite, notes=notes)
             return "converted_cpu" if result == "converted" else result
+
+    cleaned = None
+    if job.input_format in {"csv", "tsv"}:
+        try:
+            cleaned, note = check_text_rows(job.source, job.input_format, options)
+        except ValueError as exc:
+            exc.damaged_rows = True  # a CPU retry would fail the same way
+            raise
+        if note and notes is not None:
+            notes.append(note)
+
+    def source() -> Any:
+        return job.source if cleaned is None else io.BytesIO(cleaned)
 
     job.target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
@@ -519,7 +656,7 @@ def convert_one(
     used_fallback = False
     try:
         try:
-            data = read_data(job.source, job.input_format, engine, options, backend)
+            data = read_data(source(), job.input_format, engine, options, backend)
             write_data(data, temporary, output_format, engine, options, backend)
         except Exception:
             if (
@@ -530,7 +667,7 @@ def convert_one(
             ):
                 raise
             data = None  # drop GPU buffers before retrying on the CPU
-            cpu_data = read_data(job.source, job.input_format, fallback[0], options, fallback[1])
+            cpu_data = read_data(source(), job.input_format, fallback[0], options, fallback[1])
             write_data(cpu_data, temporary, output_format, fallback[0], options, fallback[1])
             used_fallback = True
         finally:

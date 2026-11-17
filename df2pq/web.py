@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import tempfile
 import subprocess
 import threading
 import time
@@ -16,10 +17,11 @@ from typing import Any
 
 from nicegui import Client, app, run, ui
 
-from .converter import ENGINE_FORMATS, FORMAT_SUFFIXES, IOOptions
+from .converter import ENGINE_FORMATS, FORMAT_SUFFIXES, IOOptions, build_jobs
 from .gpu import GpuStatus, initialize_gpu, probe_cudf
 from .gpu_runtime import download_percent
-from .runner import BatchRunner
+from .preview import Preview, preview_file
+from .runner import PARALLEL_ENGINES, BatchRunner
 from .scan import FolderSummary, fuzzy_match, human_size, places, summarize_folder
 from .settings import Settings
 from .updates import current_version
@@ -28,10 +30,14 @@ from .web_about import cached_update, check_for_updates, check_is_due, show_abou
 ENGINE_LABELS = {"cudf": "cuDF · GPU", "pandas": "Pandas · CPU", "pyarrow": "PyArrow · CPU"}
 ENGINE_HINTS = {
     "cudf": "Runs on the GPU. Files larger than VRAM spill to RAM, and a file the GPU cannot "
-            "handle is retried on the CPU automatically.",
+            "handle is retried on the CPU automatically. Decimal numbers can differ from the "
+            "text in the last digit (about 1e-15 relative); use PyArrow or pandas when values "
+            "must match the source exactly.",
     "pandas": "Most compatible engine — also reads and writes Excel and Pickle.",
     "pyarrow": "Fast multi-threaded CPU engine with low memory use.",
 }
+BAD_ROW_LABELS = {"drop": "Drop and report", "keep": "Keep as empty values",
+                  "fail": "Fail the file"}
 FORMAT_LABELS = {
     "auto": "Auto-detect", "csv": "CSV", "tsv": "TSV", "parquet": "Parquet", "feather": "Feather",
     "json": "JSON", "jsonl": "JSON Lines", "orc": "ORC", "ipc": "Arrow IPC", "excel": "Excel",
@@ -78,6 +84,11 @@ body { background: var(--bg) !important; color: var(--ink); font-size: 14px;
 .q-expansion-item__container, .q-expansion-item { background: transparent; }
 .nicegui-content { padding: 0 !important; }
 .df-version { color: var(--muted); }
+.df-tabs { border-bottom: 1px solid var(--line); }
+.df-tabs .q-tab { font-weight: 600; padding: 0 18px; }
+.df-panels { background: transparent !important; }
+.df-pre { white-space: pre; font-family: var(--df-mono); font-size: 12px;
+          overflow-x: auto; max-height: 420px; }
 .df-markdown h1 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
 .df-markdown h2 { font-size: 17px; font-weight: 650; margin: 22px 0 6px; color: var(--ink); }
 .df-markdown h3 { font-size: 13px; font-weight: 700; margin: 14px 0 4px; color: #60A5FA;
@@ -121,6 +132,9 @@ class State:
         self.recursive = True
         self.header = True
         self.json_lines = False
+        self.bad_rows = "drop"
+        self.cancel_requested = False
+        self.workers = max(1, int(self.settings.get("workers", 1) or 1))
         self.overwrite = False
         self.run_started = 0.0
         self.busy = False
@@ -381,115 +395,177 @@ def index() -> None:
         w["gpu_download"] = ui.linear_progress(value=0).props("color=amber").classes("w-full mb-4")
         w["gpu_download"].set_visibility(False)
 
-        with ui.row().classes("w-full no-wrap gap-5 items-stretch"):
-            # 1 — sources
-            with ui.column().classes("df-card grow gap-3 p-5").style("min-width:0;flex:3"):
-                with ui.row().classes("items-center gap-2"):
-                    ui.label("1").classes("df-step")
-                    ui.label("Source folders").classes("df-card-title")
-                with ui.row().classes("w-full items-center no-wrap gap-2"):
-                    ui.button("Add folders", icon="add", on_click=lambda: add_sources()).props(
-                        "unelevated no-caps color=primary text-color=black")
-                    with ui.button("Recent", icon="history").props("flat no-caps") as recent_btn:
-                        w["recent_menu"] = ui.menu()
-                    recent_btn.on("click", lambda: fill_recent())
-                    w["remove"] = ui.button("Remove", icon="remove_circle_outline",
-                                            on_click=lambda: remove_selected()).props("flat no-caps")
-                    ui.button("Clear", on_click=lambda: clear_sources()).props("flat no-caps")
-                    ui.space()
-                    w["summary"] = ui.label().classes("df-muted")
-                columns = [
-                    {"name": "folder", "label": "FOLDER", "field": "folder", "align": "left"},
-                    {"name": "files", "label": "DATA FILES", "field": "files", "align": "right"},
-                    {"name": "size", "label": "SIZE", "field": "size", "align": "right"},
-                    {"name": "formats", "label": "FORMATS", "field": "formats", "align": "left"},
-                ]
-                w["table"] = ui.table(columns=columns, rows=[], row_key="path",
-                                      selection="multiple").props("flat").classes(
-                    "df-table w-full").style("min-height:260px")
-                w["table"].add_slot("body-cell-folder", """
-                    <q-td :props="props">
-                      <div style="font-weight:600">{{ props.row.folder }}</div>
-                      <div class="text-caption text-grey-6" style="word-break:break-all">
-                        {{ props.row.path }}</div>
-                    </q-td>""")
-                w["table"].add_slot("body-cell-files", """
-                    <q-td :props="props" :class="props.row.empty ? 'text-amber-5' : ''">
-                      {{ props.row.files }}</q-td>""")
-                with w["table"].add_slot("no-data"):
-                    with ui.column().classes("w-full items-center gap-2 py-10"):
-                        ui.icon("folder_open", size="52px").classes("df-faint")
-                        ui.label("No source folders yet").classes("df-card-title")
-                        ui.label("Pick folders to convert. Subfolders are kept, and each "
-                                 "folder's name is mirrored in the output.").classes(
-                            "df-muted text-center").style("max-width:380px")
-                        ui.button("Add folders", icon="add", on_click=lambda: add_sources()
-                                  ).props("unelevated no-caps color=primary text-color=black")
+        with ui.tabs().props("align=left inline-label no-caps active-color=primary "
+                             "indicator-color=primary").classes("df-tabs") as tabs:
+            ui.tab("paths", label="1 · Paths", icon="folder")
+            ui.tab("analysis", label="2 · Analysis", icon="analytics")
+            ui.tab("run", label="3 · Run", icon="play_circle")
+        w["tabs"] = tabs
+        with ui.tab_panels(tabs, value="paths").props("keep-alive").classes("w-full df-panels"):
+            with ui.tab_panel("paths").classes("p-0 pt-4"):
+                with ui.row().classes("w-full no-wrap gap-5 items-stretch"):
+                    # 1 — sources
+                    with ui.column().classes("df-card grow gap-3 p-5").style("min-width:0;flex:3"):
+                        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                            ui.label("1").classes("df-step")
+                            ui.label("Source folders").classes("df-card-title")
+                            ui.space()
+                            w["recursive"] = ui.checkbox("Scan subfolders",
+                                                         value=S.recursive).props("dense")
+                        with ui.row().classes("w-full items-center no-wrap gap-2"):
+                            ui.button("Add folders", icon="add", on_click=lambda: add_sources()).props(
+                                "unelevated no-caps color=primary text-color=black")
+                            with ui.button("Recent", icon="history").props("flat no-caps") as recent_btn:
+                                w["recent_menu"] = ui.menu()
+                            recent_btn.on("click", lambda: fill_recent())
+                            w["remove"] = ui.button("Remove", icon="remove_circle_outline",
+                                                    on_click=lambda: remove_selected()).props("flat no-caps")
+                            ui.button("Clear", on_click=lambda: clear_sources()).props("flat no-caps")
+                            ui.space()
+                            w["summary"] = ui.label().classes("df-muted")
+                        columns = [
+                            {"name": "folder", "label": "FOLDER", "field": "folder", "align": "left"},
+                            {"name": "files", "label": "DATA FILES", "field": "files", "align": "right"},
+                            {"name": "size", "label": "SIZE", "field": "size", "align": "right"},
+                            {"name": "formats", "label": "FORMATS", "field": "formats", "align": "left"},
+                        ]
+                        w["table"] = ui.table(columns=columns, rows=[], row_key="path",
+                                              selection="multiple").props("flat").classes(
+                            "df-table w-full").style("min-height:260px")
+                        w["table"].add_slot("body-cell-folder", """
+                            <q-td :props="props">
+                              <div style="font-weight:600">{{ props.row.folder }}</div>
+                              <div class="text-caption text-grey-6" style="word-break:break-all">
+                                {{ props.row.path }}</div>
+                            </q-td>""")
+                        w["table"].add_slot("body-cell-files", """
+                            <q-td :props="props" :class="props.row.empty ? 'text-amber-5' : ''">
+                              {{ props.row.files }}</q-td>""")
+                        with w["table"].add_slot("no-data"):
+                            with ui.column().classes("w-full items-center gap-2 py-10"):
+                                ui.icon("folder_open", size="52px").classes("df-faint")
+                                ui.label("No source folders yet").classes("df-card-title")
+                                ui.label("Pick folders to convert. Subfolders are kept, and each "
+                                         "folder's name is mirrored in the output.").classes(
+                                    "df-muted text-center").style("max-width:380px")
+                                ui.button("Add folders", icon="add", on_click=lambda: add_sources()
+                                          ).props("unelevated no-caps color=primary text-color=black")
 
-            # 2 + 3 — destination and conversion
-            with ui.column().classes("gap-5").style("flex:2;min-width:380px"):
-                with ui.column().classes("df-card w-full gap-2 p-5"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.label("2").classes("df-step")
-                        ui.label("Destination").classes("df-card-title")
-                    ui.label("Output root folder").classes("df-label")
-                    with ui.row().classes("w-full no-wrap items-center gap-2"):
-                        w["output"] = ui.input(value=S.output_dir,
-                                               placeholder="Where converted files go").props(
-                            "outlined dense").classes("grow")
-                        ui.button("Browse", icon="folder_open", on_click=lambda: choose_output()
-                                  ).props("outline no-caps")
-                    w["layout"] = ui.label().classes("df-muted text-caption")
 
-                with ui.column().classes("df-card w-full gap-2 p-5"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.label("3").classes("df-step")
-                        ui.label("Conversion").classes("df-card-title")
-                    ui.label("Engine").classes("df-label")
-                    w["engine"] = ui.select(S.engine_options(), value=S.engine).props(
-                        "outlined dense options-dense").classes("w-full")
-                    w["engine_hint"] = ui.label().classes("df-muted text-caption")
-                    with ui.row().classes("w-full no-wrap items-end gap-2 pt-2"):
-                        with ui.column().classes("grow gap-1"):
-                            ui.label("Read").classes("df-label")
-                            w["input_format"] = ui.select(ins0, value=S.input_format).props(
-                                "outlined dense options-dense").classes("w-full")
-                        ui.icon("arrow_forward").classes("df-faint pb-2")
-                        with ui.column().classes("grow gap-1"):
-                            ui.label("Write").classes("df-label")
-                            w["output_format"] = ui.select(outs0, value=S.output_format).props(
-                                "outlined dense options-dense").classes("w-full")
-                    with ui.expansion("Advanced options", icon="tune").classes("w-full pt-2"):
-                        with ui.grid(columns=2).classes("w-full gap-x-4 gap-y-1"):
-                            w["recursive"] = ui.checkbox("Scan subfolders", value=True).props("dense")
-                            w["header"] = ui.checkbox("Input has a header", value=True).props("dense")
-                            w["json_lines"] = ui.checkbox("JSON Lines").props("dense")
-                            w["overwrite"] = ui.checkbox("Overwrite existing").props("dense")
-                            w["in_sep"] = ui.input("Input separator").props("outlined dense")
-                            w["out_sep"] = ui.input("Output separator").props("outlined dense")
-                            w["limit"] = ui.input("File limit (blank = all)").props("outlined dense")
-                        ui.label("Blank separators mean comma for CSV, tab for TSV.").classes(
-                            "df-muted text-caption pt-1")
+                    # 2 — destination
+                    with ui.column().classes("df-card gap-2 p-5").style("flex:2;min-width:380px"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label("2").classes("df-step")
+                            ui.label("Destination").classes("df-card-title")
+                        ui.label("Output root folder").classes("df-label")
+                        with ui.row().classes("w-full no-wrap items-center gap-2"):
+                            w["output"] = ui.input(value=S.output_dir,
+                                                   placeholder="Where converted files go").props(
+                                "outlined dense").classes("grow")
+                            ui.button("Browse", icon="folder_open", on_click=lambda: choose_output()
+                                      ).props("outline no-caps")
+                        w["layout"] = ui.label().classes("df-muted text-caption")
+                        w["overwrite"] = ui.checkbox("Overwrite existing files",
+                                                     value=S.overwrite).props("dense")
+                        ui.space()
+                        with ui.row().classes("w-full justify-end"):
+                            ui.button("Next: Analysis", icon="arrow_forward",
+                                      on_click=lambda: tabs.set_value("analysis")).props(
+                                "outline no-caps")
 
-        # 4 — run
-        with ui.column().classes("df-card w-full gap-3 p-5").style("margin-top:20px"):
-            with ui.row().classes("w-full items-center justify-between no-wrap"):
-                with ui.row().classes("items-center gap-2"):
-                    ui.label("4").classes("df-step")
-                    ui.label("Run").classes("df-card-title")
-                with ui.row().classes("items-center gap-2 no-wrap"):
-                    w["preview"] = ui.button("Preview plan", on_click=lambda: start(True)).props(
-                        "outline no-caps")
-                    w["cancel"] = ui.button("Cancel", on_click=lambda: S.runner.cancel()).props(
-                        "flat no-caps")
-                    w["convert"] = ui.button("Convert files", icon="play_arrow",
-                                             on_click=lambda: start(False)).props(
-                        "unelevated no-caps color=primary text-color=black").style("padding:6px 22px")
-            w["status"] = ui.label().classes("text-base font-medium")
-            w["detail"] = ui.label().classes("df-muted text-caption")
-            w["progress"] = ui.linear_progress(value=0, show_value=False, size="8px").props(
-                "rounded color=primary track-color=grey-9")
-            w["log"] = ui.log(max_lines=500).classes("df-log w-full").style("height:170px")
+            with ui.tab_panel("analysis").classes("p-0 pt-4"):
+                with ui.column().classes("w-full gap-4"):
+                    with ui.row().classes("df-card w-full items-center gap-4 p-4 no-wrap"):
+                        w["sample"] = ui.select({}, label="Sample file").props(
+                            "outlined dense options-dense").classes("grow")
+                        ui.button(icon="refresh", on_click=lambda: reload_samples()).props(
+                            "flat round").tooltip("Reload the sample files")
+                        w["engine"] = ui.select(S.engine_options(), value=S.engine,
+                                                label="Engine").props(
+                            "outlined dense options-dense").style("width:240px")
+                    w["engine_hint"] = ui.label().classes("df-muted text-caption px-1")
+                    w["warnings"] = ui.column().classes("w-full gap-2")
+                    with ui.row().classes("w-full gap-4 items-stretch"):
+                        # A — source format and read options
+                        with ui.column().classes("df-card gap-3 p-5").style(
+                                "flex:1;min-width:440px"):
+                            with ui.row().classes("items-center gap-2 no-wrap"):
+                                ui.label("A").classes("df-step")
+                                ui.label("Source").classes("df-card-title")
+                                w["a_name"] = ui.label().classes("df-muted text-caption ellipsis")
+                            with ui.row().classes("w-full items-center gap-3"):
+                                w["input_format"] = ui.select(ins0, value=S.input_format,
+                                                              label="Read as").props(
+                                    "outlined dense options-dense").style("width:170px")
+                                w["in_sep"] = ui.input("Separator", value=S.input_separator,
+                                                       placeholder="default").props(
+                                    "outlined dense").style("width:110px")
+                                w["header"] = ui.checkbox("Input has a header",
+                                                          value=S.header).props("dense")
+                                w["json_lines"] = ui.checkbox("JSON Lines",
+                                                              value=S.json_lines).props("dense")
+                                w["bad_rows"] = ui.select(BAD_ROW_LABELS, value=S.bad_rows,
+                                                          label="Damaged rows").props(
+                                    "outlined dense options-dense").style("width:220px").tooltip(
+                                    "CSV/TSV rows with the wrong number of fields or zero "
+                                    "bytes, e.g. a recording cut off mid-write. Every case is "
+                                    "reported in the Run log.")
+                            w["before"] = ui.column().classes("w-full gap-1")
+                        # B — destination format and write options
+                        with ui.column().classes("df-card gap-3 p-5").style(
+                                "flex:1;min-width:440px"):
+                            with ui.row().classes("items-center gap-2 no-wrap"):
+                                ui.label("B").classes("df-step")
+                                ui.label("Destination").classes("df-card-title")
+                                w["b_name"] = ui.label().classes("df-muted text-caption ellipsis")
+                            with ui.row().classes("w-full items-center gap-3"):
+                                w["output_format"] = ui.select(outs0, value=S.output_format,
+                                                               label="Write as").props(
+                                    "outlined dense options-dense").style("width:170px")
+                                w["out_sep"] = ui.input("Separator", value=S.output_separator,
+                                                        placeholder="default").props(
+                                    "outlined dense").style("width:110px")
+                            w["after"] = ui.column().classes("w-full gap-1")
+                    with ui.row().classes("w-full items-center no-wrap"):
+                        ui.label("Only the first rows of the sample file are read; nothing is "
+                                 "written. Blank separators mean comma for CSV and tab for TSV."
+                                 ).classes("df-muted text-caption px-1")
+                        ui.space()
+                        ui.button("Next: Run", icon="arrow_forward",
+                                  on_click=lambda: tabs.set_value("run")).props(
+                            "outline no-caps")
+
+            with ui.tab_panel("run").classes("p-0 pt-4"):
+                with ui.column().classes("df-card w-full gap-3 p-5"):
+                    with ui.row().classes("w-full items-center justify-between no-wrap"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label("3").classes("df-step")
+                            ui.label("Run").classes("df-card-title")
+                        with ui.row().classes("items-center gap-2 no-wrap"):
+                            cores = os.cpu_count() or 1
+                            w["workers"] = ui.number(
+                                "Parallel files", value=S.workers, min=1, max=cores, step=1,
+                                format="%d").props("outlined dense").style("width:130px")
+                            w["workers"].tooltip(
+                                f"Files converted at the same time, one process each "
+                                f"(PyArrow and pandas; cuDF uses the GPU one file at a time). "
+                                f"This computer has {cores} CPU cores. Each process holds one "
+                                f"file in memory.")
+                            w["limit"] = ui.input("File limit", placeholder="all").props(
+                                "outlined dense").style("width:110px")
+                            w["preview"] = ui.button("Preview plan", on_click=lambda: start(True)).props(
+                                "outline no-caps")
+                            w["cancel"] = ui.button("Cancel", on_click=lambda: cancel_run()).props(
+                                "flat no-caps")
+                            w["convert"] = ui.button("Convert files", icon="play_arrow",
+                                                     on_click=lambda: start(False)).props(
+                                "unelevated no-caps color=primary text-color=black").style("padding:6px 22px")
+                    w["status"] = ui.label().classes("text-base font-medium")
+                    w["detail"] = ui.label().classes("df-muted text-caption")
+                    w["progress"] = ui.linear_progress(value=0, show_value=False, size="8px").props(
+                        "rounded color=primary track-color=grey-9")
+                    w["log"] = ui.log(max_lines=500).classes("df-log w-full").style("height:420px")
+
 
     # ---- behaviour ---------------------------------------------------------------------
     def sync_badge() -> None:
@@ -557,6 +633,7 @@ def index() -> None:
         ready = bool(S.sources) and bool(S.output_dir.strip()) and not S.busy
         w["convert"].set_enabled(ready)
         w["preview"].set_enabled(ready)
+        w["workers"].set_enabled(S.engine in PARALLEL_ENGINES and not S.busy)
         w["cancel"].set_enabled(S.busy)
         if S.busy:
             return
@@ -603,6 +680,7 @@ def index() -> None:
             ui.notify("Folder names must be unique; skipped: " + ", ".join(skipped),
                       type="warning")
         refresh()
+        analysis_changed("sources")
 
     async def add_sources() -> None:
         chosen = await pick_folders(title="Add source folders", action="Add", multiple=True,
@@ -625,11 +703,13 @@ def index() -> None:
         S.sources[:] = [p for p in S.sources if str(p) not in gone]
         w["table"].selected.clear()
         refresh()
+        analysis_changed("sources")
 
     def clear_sources() -> None:
         S.sources.clear()
         w["table"].selected.clear()
         refresh()
+        analysis_changed("sources")
 
     async def choose_output() -> None:
         current = Path(S.output_dir).expanduser() if S.output_dir else None
@@ -643,6 +723,7 @@ def index() -> None:
             S.engine = e.value
             refresh_formats()
             refresh()
+            analysis_changed("engine")
 
     def on_field(attr: str):
         def handler(e: Any) -> None:
@@ -651,36 +732,220 @@ def index() -> None:
                 for p in S.sources:
                     scan_async(p)
             refresh()
+            analysis_changed(attr)
         return handler
 
+    def on_workers(e: Any) -> None:
+        try:
+            S.workers = max(1, int(e.value or 1))
+        except (TypeError, ValueError):
+            S.workers = 1
+
+    w["workers"].on_value_change(on_workers)
     w["engine"].on_value_change(on_engine)
     w["input_format"].on_value_change(on_field("input_format"))
     w["output_format"].on_value_change(on_field("output_format"))
     w["output"].on_value_change(on_field("output_dir"))
     for key, attr in (("recursive", "recursive"), ("header", "header"),
                       ("json_lines", "json_lines"), ("overwrite", "overwrite"),
+                      ("bad_rows", "bad_rows"),
                       ("in_sep", "input_separator"), ("out_sep", "output_separator"),
                       ("limit", "limit")):
         w[key].on_value_change(on_field(attr))
 
-    def start(dry_run: bool) -> None:
-        if S.runner.running or not S.sources or not S.output_dir.strip():
+    def current_options() -> IOOptions:
+        for label, value in (("Input separator", S.input_separator),
+                             ("Output separator", S.output_separator)):
+            if value and len(value) != 1:
+                raise ValueError(f"{label} must be a single character.")
+        return IOOptions(input_separator=S.input_separator or None,
+                         output_separator=S.output_separator or None,
+                         header=S.header, json_lines=S.json_lines, bad_rows=S.bad_rows)
+
+    def sample_jobs(per_source: int) -> list[Any]:
+        """The first files of each source folder, exactly as the batch would pick them."""
+        jobs = []
+        for source in S.sources:
+            try:
+                output = (Path(S.output_dir).expanduser() if S.output_dir.strip()
+                          else Path(tempfile.gettempdir()) / "df2pq-preview")
+                jobs += build_jobs([source], output, S.input_format,
+                                   S.output_format, S.engine, recursive=S.recursive,
+                                   limit=per_source)
+            except ValueError:
+                pass  # a folder without matching files
+        return jobs
+
+    analysis: dict[str, Any] = {"jobs": [], "stale": True, "gen": 0}
+    SAMPLE_SETTINGS = {"sources", "recursive", "input_format", "engine"}
+    PREVIEW_SETTINGS = {"header", "json_lines", "input_separator", "output_separator",
+                        "output_format"}
+
+    def banner(message: str, tone: str) -> None:
+        colors = {"warn": ("#3B2A0B", "#FBBF24", "warning"), "err": ("#3B1212", "#F87171", "error"),
+                  "ok": ("#10301F", "#4ADE80", "check_circle"), "info": ("#18233C", "#94A3B8", "info")}
+        background, color, icon = colors[tone]
+        with ui.row().classes("w-full no-wrap items-start gap-2 p-3 rounded").style(
+                f"background:{background};color:{color};border-radius:10px"):
+            ui.icon(icon).classes("pt-1")
+            ui.label(message)
+
+    def data_table(t: Any) -> None:
+        columns = [{"name": f"c{i}", "field": f"c{i}", "align": "left",
+                    "label": f"{name} · {dtype}"}
+                   for i, (name, dtype) in enumerate(zip(t.columns, t.dtypes))]
+        rows = [{f"c{i}": v for i, v in enumerate(r)} for r in t.rows]
+        ui.table(columns=columns, rows=rows).props("dense flat").classes(
+            "df-table w-full").style("overflow-x:auto")
+
+    def render_analysis(p: Preview | None, job: Any = None, message: str = "") -> None:
+        for key in ("warnings", "before", "after"):
+            w[key].clear()
+        w["a_name"].set_text(job.source.name if job else "")
+        w["b_name"].set_text(job.target.name if job else "")
+        with w["warnings"]:
+            if message:
+                banner(message, "info")
+                return
+            for text in p.warnings:
+                banner(text, "warn")
+            if p.error:
+                banner(p.error, "err")
+            if not p.warnings and not p.error:
+                banner("No problems detected in this file with the current settings.", "ok")
+        with w["before"]:
+            ui.label("As stored in the file").classes("df-label")
+            if p.raw_lines:
+                ui.label("\n".join(p.raw_lines)).classes("df-log df-pre w-full p-3")
+            elif p.before is not None:
+                data_table(p.before)
+        with w["after"]:
+            ui.label(f"What the {FORMAT_LABELS[S.output_format]} file will contain "
+                     "(column · type)").classes("df-label")
+            if p.after is not None:
+                data_table(p.after)
+                ui.label(f"{len(p.after.columns)} column(s) · first {len(p.after.rows)} "
+                         "row(s)").classes("df-muted text-caption")
+
+    def on_analysis_tab() -> bool:
+        return w["tabs"].value == "analysis"
+
+    def analysis_changed(setting: str) -> None:
+        if setting in SAMPLE_SETTINGS:
+            analysis["stale"] = True
+        if on_analysis_tab() and setting in SAMPLE_SETTINGS | PREVIEW_SETTINGS:
+            asyncio.create_task(reload_samples() if analysis["stale"] else update_analysis())
+
+    async def reload_samples() -> None:
+        analysis["stale"] = False
+        previous = analysis["jobs"][w["sample"].value].source if (
+            analysis["jobs"] and w["sample"].value is not None) else None
+        jobs = await run.io_bound(sample_jobs, 10) if S.sources else []
+        analysis["jobs"] = jobs
+        options = {i: f"{j.source_root.name}/{j.source.relative_to(j.source_root)}"
+                   for i, j in enumerate(jobs)}
+        keep = next((i for i, j in enumerate(jobs) if j.source == previous), 0)
+        w["sample"].set_options(options, value=keep if jobs else None)
+        await update_analysis()
+
+    async def update_analysis() -> None:
+        analysis["gen"] += 1
+        generation = analysis["gen"]
+        jobs = analysis["jobs"]
+        if not S.sources:
+            render_analysis(None, message="Add source folders in the Paths tab to analyse them.")
+            return
+        if not jobs:
+            render_analysis(None, message="No files in the source folders match the "
+                                          "current Read format.")
+            return
+        try:
+            options = current_options()
+        except ValueError as exc:
+            render_analysis(None, message=str(exc))
+            return
+        job = jobs[w["sample"].value or 0]
+        p = await run.io_bound(preview_file, job.source, job.input_format,
+                               S.output_format, options)
+        if generation == analysis["gen"]:  # drop results overtaken by newer settings
+            render_analysis(p, job)
+
+    w["sample"].on_value_change(lambda: asyncio.create_task(update_analysis()))
+    w["tabs"].on_value_change(lambda e: asyncio.create_task(
+        reload_samples() if analysis["stale"] else update_analysis())
+        if e.value == "analysis" else None)
+
+    async def check_before_convert() -> bool:
+        """Preview the first file and ask before converting with suspicious settings."""
+        jobs = await run.io_bound(sample_jobs, 1)
+        if not jobs:
+            return True  # the runner reports the empty plan
+        job = jobs[0]
+        p = await run.io_bound(preview_file, job.source, job.input_format,
+                               S.output_format, current_options())
+        if not p.warnings and not p.error:
+            return True
+        with ui.dialog() as dialog, ui.card().classes("df-card gap-3 p-5").style(
+                "width:min(640px,95vw)"):
+            ui.label("Check the data before converting").classes("df-card-title")
+            ui.label(f"In {job.source.name}:").classes("df-muted")
+            for message in p.warnings + ([p.error] if p.error else []):
+                with ui.row().classes("w-full no-wrap items-start gap-2"):
+                    ui.icon("warning").style("color:#FBBF24").classes("pt-1")
+                    ui.label(message)
+            with ui.row().classes("w-full justify-end gap-2 pt-2"):
+                ui.button("Cancel", on_click=lambda: dialog.submit("cancel")).props(
+                    "flat no-caps")
+                ui.button("Convert anyway", on_click=lambda: dialog.submit("convert")).props(
+                    "outline no-caps")
+                ui.button("Review in Analysis", icon="analytics",
+                          on_click=lambda: dialog.submit("review")).props(
+                    "unelevated no-caps color=primary text-color=black")
+        choice = await dialog
+        if choice == "review":
+            analysis["stale"] = True
+            w["tabs"].set_value("analysis")
+        return choice == "convert"
+
+    def cancel_run() -> None:
+        # The runner may not have started yet (the first file is being checked);
+        # remember the request so the batch does not start afterwards.
+        S.cancel_requested = True
+        S.runner.cancel()
+
+    async def start(dry_run: bool) -> None:
+        if S.runner.running or S.busy or not S.sources or not S.output_dir.strip():
             return
         try:
             limit = int(S.limit.strip()) if S.limit.strip() else None
             if limit is not None and limit < 1:
                 raise ValueError("The file limit must be a positive integer.")
-            for label, value in (("Input separator", S.input_separator),
-                                 ("Output separator", S.output_separator)):
-                if value and len(value) != 1:
-                    raise ValueError(f"{label} must be a single character.")
+            options = current_options()
         except ValueError as exc:
             ui.notify(str(exc), type="negative")
             return
+        if not dry_run:
+            S.busy = True  # block a second click while the first file is checked
+            S.cancel_requested = False
+            w["log"].clear()  # no lines from the previous run while checking
+            refresh()
+            set_status("Checking the first file…", "info")
+            try:
+                proceed = await check_before_convert()
+            finally:
+                S.busy = False
+                refresh()
+            if S.cancel_requested:
+                set_status("Cancelled before any file was converted.", "warn")
+                return
+            if not proceed:
+                return
         S.settings.set("output_format", S.output_format)
         S.settings.set("output_dir", S.output_dir.strip())
         S.settings.set("engine", S.engine)
+        S.settings.set("workers", S.workers)
         S.settings.save()
+        w["tabs"].set_value("run")
         w["log"].clear()
         S.busy = True
         S.run_started = time.monotonic()
@@ -691,10 +956,9 @@ def index() -> None:
         S.runner.start(
             sources=list(S.sources), output=Path(S.output_dir).expanduser(),
             input_format=S.input_format, output_format=S.output_format, engine=S.engine,
-            options=IOOptions(input_separator=S.input_separator or None,
-                              output_separator=S.output_separator or None,
-                              header=S.header, json_lines=S.json_lines),
-            recursive=S.recursive, limit=limit, overwrite=S.overwrite, dry_run=dry_run)
+            options=options,
+            recursive=S.recursive, limit=limit, overwrite=S.overwrite, dry_run=dry_run,
+            workers=S.workers if S.engine in PARALLEL_ENGINES else 1)
 
     def finish_run(message: str, tone: str) -> None:
         S.busy = False
@@ -705,7 +969,10 @@ def index() -> None:
         set_status(message, tone)
 
     def handle(kind: str, payload: Any) -> None:
-        if kind == "plan":
+        if kind == "ignored":
+            path, reason = payload
+            w["log"].push(f"IGNORED  {path}  ({reason})", classes="text-slate-500")
+        elif kind == "plan":
             w["progress"].props(remove="indeterminate")
             w["progress"].set_value(0)
             set_status(f"Processing {payload:,} file(s)…", "info")
@@ -729,8 +996,13 @@ def index() -> None:
             elif result == "converted_cpu":
                 w["log"].push(f"DONE·CPU {job.target}  (GPU failed on this file)",
                               classes="text-amber-400")
+            elif error:
+                w["log"].push(f"DONE·WARN {job.target}\n         {error}",
+                              classes="text-amber-400")
             else:
                 w["log"].push(f"DONE     {job.target}", classes="text-green-400")
+            if error and result == "converted_cpu":
+                w["log"].push(f"         {error}", classes="text-amber-400")
         elif kind == "done":
             converted, skipped, failed, dry = payload
             if dry:
@@ -881,5 +1153,6 @@ def main(argv: list[str] | None = None) -> None:
            reload=False, show=False, favicon="🗂️")
 
 
-if __name__ in {"__main__", "__mp_main__"}:
+# Not "__mp_main__": spawned conversion processes must not start the app.
+if __name__ == "__main__":
     main()

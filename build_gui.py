@@ -9,6 +9,13 @@ for _name in ("stdout", "stderr"):
     if getattr(sys, _name) is None:
         setattr(sys, _name, open(os.devnull, "w"))
 
+import multiprocessing
+
+if __name__ == "__main__":
+    # In the bundle, parallel conversion processes re-run this executable; hand
+    # them over before the interface is imported.
+    multiprocessing.freeze_support()
+
 from df2pq.web import main
 
 
