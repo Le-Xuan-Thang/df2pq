@@ -6,6 +6,8 @@ All notable changes to df2pq are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-17
+
 ### Added
 - **Update now** for RPM and DEB installs: the app downloads the new package,
   checks it against the release's `SHA256SUMS` and installs it with the system
